@@ -551,8 +551,6 @@ model Staff {
   reviewedCorrections  AttendanceCorrectionRequest[] @relation("ReviewedCorrections")
   broadcastRecipients  BroadcastRecipient[]
   chatThreads          ChatThread[]
-  isPlatformOwner      Boolean                       @default(false) @map("is_platform_owner")
-  supportAccessGrants  SupportAccessGrant[]
 
   subjectsTaught    String?                 @map("subjects_taught") @db.VarChar(500)
   subjectAssignments StaffSubjectAssignment[]
@@ -1163,18 +1161,33 @@ model PromotionRun {
 }
 
 model SupportAccessGrant {
-  id          String    @id @default(uuid()) @db.Uuid
-  schoolId    String    @map("school_id") @db.Uuid
-  staffId     String    @map("staff_id") @db.Uuid
-  reason      String    @db.VarChar(500)
-  duration    Int
-  requestedAt DateTime  @default(now()) @map("requested_at")
-  expiresAt   DateTime  @map("expires_at")
-  revokedAt   DateTime? @map("revoked_at")
-  revokedBy   String?   @map("revoked_by") @db.Uuid
+  id              String        @id @default(uuid()) @db.Uuid
+  schoolId        String        @map("school_id") @db.Uuid
+  platformOwnerId String        @map("platform_owner_id") @db.Uuid
+  reason          String        @db.VarChar(500)
+  duration        Int
+  requestedAt     DateTime      @default(now()) @map("requested_at")
+  expiresAt       DateTime      @map("expires_at")
+  revokedAt       DateTime?     @map("revoked_at")
+  revokedBy       String?       @map("revoked_by") @db.Uuid
 
-  school      School    @relation(fields: [schoolId], references: [id])
-  staff       Staff     @relation(fields: [staffId], references: [id])
+  school        School        @relation(fields: [schoolId], references: [id])
+  platformOwner PlatformOwner @relation(fields: [platformOwnerId], references: [id])
 
   @@map("support_access_grants")
 }
+
+model PlatformOwner {
+  id                  String               @id @default(uuid()) @db.Uuid
+  firstName           String               @map("first_name") @db.VarChar(100)
+  lastName            String               @map("last_name") @db.VarChar(100)
+  email               String               @unique @db.VarChar(255)
+  passwordHash        String?              @map("password_hash")
+  status              String               @default("active")
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+  supportAccessGrants SupportAccessGrant[]
+
+  @@map("platform_owners")
+}
+

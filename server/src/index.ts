@@ -35,37 +35,37 @@ app.post('/v1/auth/login', async (req, res) => {
     }
 
     const emailLower = email.toLowerCase();
-    const staff = await prisma.staff.findUnique({
+    const platformOwner = await prisma.platformOwner.findUnique({
       where: { email: emailLower },
     });
 
-    if (!staff || !staff.isPlatformOwner) {
+    if (!platformOwner) {
       return res.status(401).json({ error: 'Invalid credentials or access denied' });
     }
 
     // Compare password
-    const isPasswordValid = staff.passwordHash ? await bcrypt.compare(password, staff.passwordHash) : false;
+    const isPasswordValid = platformOwner.passwordHash ? await bcrypt.compare(password, platformOwner.passwordHash) : false;
     if (!isPasswordValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Generate JWT
     const tokenPayload = {
-      id: staff.id,
-      email: staff.email,
+      id: platformOwner.id,
+      email: platformOwner.email,
       isPlatformOwner: true,
     };
     const accessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '24h' });
 
-    console.log(`[AUTH] Successful login for platform owner: ${staff.email}`);
+    console.log(`[AUTH] Successful login for platform owner: ${platformOwner.email}`);
 
     return res.json({
       accessToken,
       user: {
-        id: staff.id,
-        firstName: staff.firstName,
-        lastName: staff.lastName,
-        email: staff.email,
+        id: platformOwner.id,
+        firstName: platformOwner.firstName,
+        lastName: platformOwner.lastName,
+        email: platformOwner.email,
         role: 'platform_owner',
         roles: ['platform_owner'],
       },
@@ -78,21 +78,21 @@ app.post('/v1/auth/login', async (req, res) => {
 
 app.get('/v1/auth/me', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const staffId = req.user?.id;
-    const staff = await prisma.staff.findUnique({
-      where: { id: staffId },
+    const platformOwnerId = req.user?.id;
+    const platformOwner = await prisma.platformOwner.findUnique({
+      where: { id: platformOwnerId },
     });
 
-    if (!staff) {
+    if (!platformOwner) {
       return res.status(404).json({ error: 'User not found' });
     }
 
     return res.json({
       user: {
-        id: staff.id,
-        firstName: staff.firstName,
-        lastName: staff.lastName,
-        email: staff.email,
+        id: platformOwner.id,
+        firstName: platformOwner.firstName,
+        lastName: platformOwner.lastName,
+        email: platformOwner.email,
         role: 'platform_owner',
         roles: ['platform_owner'],
       }
@@ -243,7 +243,7 @@ app.get('/v1/platform/support-access/active', requireAuth, async (req, res) => {
       },
       include: {
         school: { select: { id: true, name: true } },
-        staff: { select: { id: true, firstName: true, lastName: true, email: true } },
+        platformOwner: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
       orderBy: { requestedAt: 'desc' },
     });
@@ -257,8 +257,8 @@ app.get('/v1/platform/support-access/active', requireAuth, async (req, res) => {
 
 app.post('/v1/platform/support-access/grant', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const staffId = req.user?.id;
-    if (!staffId) {
+    const platformOwnerId = req.user?.id;
+    if (!platformOwnerId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -280,7 +280,7 @@ app.post('/v1/platform/support-access/grant', requireAuth, async (req: Authentic
     const grant = await prisma.supportAccessGrant.create({
       data: {
         schoolId,
-        staffId,
+        platformOwnerId,
         reason,
         duration: Number(duration),
         expiresAt,
@@ -290,7 +290,7 @@ app.post('/v1/platform/support-access/grant', requireAuth, async (req: Authentic
       },
     });
 
-    console.log(`[SUPPORT] Platform owner (${staffId}) granted access to school: ${school.name}`);
+    console.log(`[SUPPORT] Platform owner (${platformOwnerId}) granted access to school: ${school.name}`);
 
     return res.json(grant);
   } catch (error: any) {
@@ -301,8 +301,8 @@ app.post('/v1/platform/support-access/grant', requireAuth, async (req: Authentic
 
 app.post('/v1/platform/support-access/revoke/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const staffId = req.user?.id;
-    if (!staffId) {
+    const platformOwnerId = req.user?.id;
+    if (!platformOwnerId) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
@@ -318,7 +318,7 @@ app.post('/v1/platform/support-access/revoke/:id', requireAuth, async (req: Auth
       where: { id },
       data: {
         revokedAt: new Date(),
-        revokedBy: staffId,
+        revokedBy: platformOwnerId,
       },
     });
 
