@@ -27,7 +27,19 @@ model School {
   logoBlobPath   String? @map("logo_blob_path") @db.VarChar(500)
   primaryColor   String  @default("#1F4E78") @map("primary_color") @db.VarChar(7)
   secondaryColor String? @map("secondary_color") @db.VarChar(7)
-  status         String  @default("active") // active / onboarding / suspended / closed
+  status                 SchoolStatus            @default(ACTIVE)
+  pausedAt               DateTime?               @map("paused_at")
+  pausedReason           String?                 @map("paused_reason") @db.Text
+  archivedAt             DateTime?               @map("archived_at")
+  archivedReason         String?                 @map("archived_reason") @db.Text
+  deletedAt              DateTime?               @map("deleted_at")
+  deletedReason          String?                 @map("deleted_reason") @db.Text
+  deletedBy              String?                 @map("deleted_by") @db.Uuid
+  restoreDeadline        DateTime?               @map("restore_deadline")
+  purgedAt               DateTime?               @map("purged_at")
+  purgedBy               String?                 @map("purged_by") @db.Uuid
+  purgeStatus            String?                 @map("purge_status") @db.VarChar(20)
+  statusHistory          SchoolStatusHistory[]
 
   // School Information
   schoolType             String? @map("school_type") @db.VarChar(30)
@@ -1186,8 +1198,33 @@ model PlatformOwner {
   status              String               @default("active")
   createdAt           DateTime             @default(now()) @map("created_at")
   updatedAt           DateTime             @updatedAt @map("updated_at")
-  supportAccessGrants SupportAccessGrant[]
+  supportAccessGrants   SupportAccessGrant[]
+  schoolStatusHistories SchoolStatusHistory[]
 
   @@map("platform_owners")
+}
+
+model SchoolStatusHistory {
+  id         String       @id @default(uuid()) @db.Uuid
+  schoolId   String       @map("school_id") @db.Uuid
+  fromStatus SchoolStatus @map("from_status")
+  toStatus   SchoolStatus @map("to_status")
+  changedBy  String       @map("changed_by") @db.Uuid
+  reason     String       @db.Text
+  changedAt  DateTime     @default(now()) @map("changed_at")
+  metadata   Json?        @db.JsonB
+
+  school        School        @relation(fields: [schoolId], references: [id])
+  platformOwner PlatformOwner @relation(fields: [changedBy], references: [id])
+
+  @@map("school_status_history")
+}
+
+enum SchoolStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+  DELETED
+  PURGED
 }
 

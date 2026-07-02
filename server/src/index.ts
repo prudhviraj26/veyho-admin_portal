@@ -126,6 +126,10 @@ app.get('/v1/platform/schools', requireAuth, async (req, res) => {
     const result = schools.map((school) => ({
       id: school.id,
       name: school.name,
+      shortName: school.shortName,
+      status: school.status,
+      restoreDeadline: school.restoreDeadline,
+      purgeStatus: school.purgeStatus,
       createdAt: school.createdAt,
       phonePrimary: school.phonePrimary,
       emailPrimary: school.emailPrimary,
@@ -327,6 +331,553 @@ app.post('/v1/platform/support-access/revoke/:id', requireAuth, async (req: Auth
     return res.json(updatedGrant);
   } catch (error: any) {
     console.error('Error revoking support grant:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============================================================================
+// SCHOOL LIFECYCLE MANAGEMENT ENDPOINTS
+// ============================================================================
+
+// Helper to get detailed school response
+async function getSchoolResponse(schoolId: string) {
+  const school = await prisma.school.findUnique({
+    where: { id: schoolId },
+    include: {
+      _count: {
+        select: {
+          students: true,
+          staffRoles: true,
+          classes: true,
+        },
+      },
+    },
+  });
+  if (!school) return null;
+  return {
+    id: school.id,
+    name: school.name,
+    status: school.status,
+    createdAt: school.createdAt,
+    phonePrimary: school.phonePrimary,
+    emailPrimary: school.emailPrimary,
+    studentCount: school._count.students,
+    staffCount: school._count.staffRoles,
+    classCount: school._count.classes,
+    pausedAt: school.pausedAt,
+    pausedReason: school.pausedReason,
+    archivedAt: school.archivedAt,
+    archivedReason: school.archivedReason,
+    deletedAt: school.deletedAt,
+    deletedReason: school.deletedReason,
+    deletedBy: school.deletedBy,
+    restoreDeadline: school.restoreDeadline,
+    purgedAt: school.purgedAt,
+    purgedBy: school.purgedBy,
+    purgeStatus: school.purgeStatus,
+    shortName: school.shortName,
+  };
+}
+
+// Background cleanup worker
+async function runBackgroundPurge(schoolId: string) {
+  console.log(`[PURGE] Starting async database purge for school: ${schoolId}`);
+  try {
+    // 1. Anonymise all student PII
+    const students = await prisma.student.findMany({ where: { schoolId } });
+    for (const s of students) {
+      await prisma.student.update({
+        where: { id: s.id },
+        data: {
+          firstName: 'Student',
+          lastName: s.id.substring(0, 8),
+          dateOfBirth: new Date('1970-01-01'),
+          aadhaarNumber: null,
+          photoBlobPath: null,
+        },
+      });
+    }
+    console.log(`[PURGE] Anonymised PII for ${students.length} students.`);
+
+    // 2. Delete all staff records
+    const school = await prisma.school.findUnique({ where: { id: schoolId } });
+    if (school) {
+      // Set classTeacherStaffId = null in sections to prevent constraint violations
+      await prisma.section.updateMany({
+        where: { schoolId },
+        data: { classTeacherStaffId: null },
+      });
+
+      // Delete auth sessions for these staff members
+      await prisma.$executeRawUnsafe(
+        'DELETE FROM auth_sessions WHERE staff_id IN (SELECT id FROM staff WHERE group_id = $1::uuid)',
+        school.groupId
+      );
+
+      // Delete broadcast recipients for these staff members
+      await prisma.$executeRawUnsafe(
+        'DELETE FROM broadcast_recipients WHERE staff_id IN (SELECT id FROM staff WHERE group_id = $1::uuid)',
+        school.groupId
+      );
+
+      // Delete staff subject assignments
+      await prisma.$executeRawUnsafe(
+        'DELETE FROM staff_subject_assignments WHERE staff_id IN (SELECT id FROM staff WHERE group_id = $1::uuid)',
+        school.groupId
+      );
+
+      // Delete staff attendance records
+      await prisma.staffAttendanceRecord.deleteMany({ where: { schoolId } });
+
+      // Delete staff roles for this school
+      await prisma.staffSchoolRole.deleteMany({ where: { schoolId } });
+      
+      // Delete staff records belonging to this school's group
+      const staffDeleted = await prisma.staff.deleteMany({ where: { groupId: school.groupId } });
+      console.log(`[PURGE] Deleted ${staffDeleted.count} staff records.`);
+    }
+
+    // 3. Delete all operational data
+    // Attendance
+    await prisma.studentAttendanceRecord.deleteMany({ where: { session: { schoolId } } });
+    await prisma.attendanceCorrectionRequest.deleteMany({ where: { schoolId } });
+    await prisma.attendanceSession.deleteMany({ where: { schoolId } });
+    
+    // Notices / Broadcasts
+    await prisma.broadcastRecipient.deleteMany({ where: { broadcast: { schoolId } } });
+    await prisma.broadcast.deleteMany({ where: { schoolId } });
+    
+    // Chats
+    await prisma.chatMessage.deleteMany({ where: { thread: { schoolId } } });
+    
+    const threads = await prisma.chatThread.findMany({
+      where: { schoolId },
+      select: { id: true }
+    });
+    const threadIds = threads.map(t => t.id);
+    await prisma.chatAdminAccessLog.deleteMany({
+      where: { threadId: { in: threadIds } }
+    });
+    
+    await prisma.chatThread.deleteMany({ where: { schoolId } });
+
+    // Holidays & Promotions & Notifications
+    await prisma.schoolHoliday.deleteMany({ where: { schoolId } });
+    await prisma.promotionRun.deleteMany({ where: { schoolId } });
+    await prisma.notificationLog.deleteMany({ where: { schoolId } });
+    await prisma.notificationRule.deleteMany({ where: { schoolId } });
+
+    // Mark purge as COMPLETED
+    await prisma.school.update({
+      where: { id: schoolId },
+      data: { purgeStatus: 'COMPLETED' },
+    });
+
+    console.log(`[PURGE] Purge completed successfully for school ID: ${schoolId}`);
+  } catch (err) {
+    console.error(`[PURGE ERROR] Failed to run background purge for school ${schoolId}:`, err);
+    try {
+      await prisma.school.update({
+        where: { id: schoolId },
+        data: { purgeStatus: 'FAILED' },
+      });
+    } catch (dbErr) {
+      console.error(`[PURGE ERROR] Failed to set status to FAILED for school ${schoolId}:`, dbErr);
+    }
+  }
+}
+
+// POST /v1/platform/schools/:id/pause
+app.post('/v1/platform/schools/:id/pause', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 10 characters is required' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status !== 'ACTIVE') {
+      return res.status(400).json({ error: 'Only ACTIVE schools can be paused' });
+    }
+
+    await prisma.$transaction([
+      prisma.school.update({
+        where: { id },
+        data: {
+          status: 'PAUSED',
+          pausedAt: new Date(),
+          pausedReason: reason,
+        },
+      }),
+      prisma.schoolStatusHistory.create({
+        data: {
+          schoolId: id,
+          fromStatus: 'ACTIVE',
+          toStatus: 'PAUSED',
+          changedBy: operatorId,
+          reason,
+        },
+      }),
+    ]);
+
+    const updated = await getSchoolResponse(id);
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('Error pausing school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/platform/schools/:id/unpause
+app.post('/v1/platform/schools/:id/unpause', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 10 characters is required' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only PAUSED schools can be reactivated' });
+    }
+
+    await prisma.$transaction([
+      prisma.school.update({
+        where: { id },
+        data: {
+          status: 'ACTIVE',
+          pausedAt: null,
+          pausedReason: null,
+        },
+      }),
+      prisma.schoolStatusHistory.create({
+        data: {
+          schoolId: id,
+          fromStatus: 'PAUSED',
+          toStatus: 'ACTIVE',
+          changedBy: operatorId,
+          reason,
+        },
+      }),
+    ]);
+
+    const updated = await getSchoolResponse(id);
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('Error reactivating school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/platform/schools/:id/archive
+app.post('/v1/platform/schools/:id/archive', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 10 characters is required' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status !== 'ACTIVE' && school.status !== 'PAUSED') {
+      return res.status(400).json({ error: 'Only ACTIVE or PAUSED schools can be archived' });
+    }
+
+    const originalStatus = school.status as any;
+
+    await prisma.$transaction([
+      prisma.school.update({
+        where: { id },
+        data: {
+          status: 'ARCHIVED',
+          archivedAt: new Date(),
+          archivedReason: reason,
+        },
+      }),
+      prisma.schoolStatusHistory.create({
+        data: {
+          schoolId: id,
+          fromStatus: originalStatus,
+          toStatus: 'ARCHIVED',
+          changedBy: operatorId,
+          reason,
+        },
+      }),
+    ]);
+
+    const updated = await getSchoolResponse(id);
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('Error archiving school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/platform/schools/:id/unarchive
+app.post('/v1/platform/schools/:id/unarchive', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 10 characters is required' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status !== 'ARCHIVED') {
+      return res.status(400).json({ error: 'Only ARCHIVED schools can be unarchived' });
+    }
+
+    await prisma.$transaction([
+      prisma.school.update({
+        where: { id },
+        data: {
+          status: 'ACTIVE',
+          archivedAt: null,
+          archivedReason: null,
+        },
+      }),
+      prisma.schoolStatusHistory.create({
+        data: {
+          schoolId: id,
+          fromStatus: 'ARCHIVED',
+          toStatus: 'ACTIVE',
+          changedBy: operatorId,
+          reason,
+        },
+      }),
+    ]);
+
+    const updated = await getSchoolResponse(id);
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('Error unarchiving school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/platform/schools/:id/delete
+app.post('/v1/platform/schools/:id/delete', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 10 characters is required' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status === 'DELETED' || school.status === 'PURGED') {
+      return res.status(400).json({ error: 'School is already deleted or purged' });
+    }
+
+    const originalStatus = school.status as any;
+    const restoreDeadline = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+
+    await prisma.$transaction([
+      prisma.school.update({
+        where: { id },
+        data: {
+          status: 'DELETED',
+          deletedAt: new Date(),
+          deletedReason: reason,
+          deletedBy: operatorId,
+          restoreDeadline,
+        },
+      }),
+      prisma.schoolStatusHistory.create({
+        data: {
+          schoolId: id,
+          fromStatus: originalStatus,
+          toStatus: 'DELETED',
+          changedBy: operatorId,
+          reason,
+        },
+      }),
+    ]);
+
+    const updated = await getSchoolResponse(id);
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('Error deleting school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/platform/schools/:id/restore
+app.post('/v1/platform/schools/:id/restore', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 10 characters is required' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status !== 'DELETED') {
+      return res.status(400).json({ error: 'Only DELETED schools can be restored' });
+    }
+
+    if (school.restoreDeadline && new Date() > school.restoreDeadline) {
+      return res.status(400).json({ error: 'Restore window has expired. Permanent deletion is required to proceed. Contact legal before purging.' });
+    }
+
+    await prisma.$transaction([
+      prisma.school.update({
+        where: { id },
+        data: {
+          status: 'ACTIVE',
+          deletedAt: null,
+          deletedReason: null,
+          deletedBy: null,
+          restoreDeadline: null,
+        },
+      }),
+      prisma.schoolStatusHistory.create({
+        data: {
+          schoolId: id,
+          fromStatus: 'DELETED',
+          toStatus: 'ACTIVE',
+          changedBy: operatorId,
+          reason,
+        },
+      }),
+    ]);
+
+    const updated = await getSchoolResponse(id);
+    return res.json(updated);
+  } catch (error: any) {
+    console.error('Error restoring school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/platform/schools/:id/purge
+app.post('/v1/platform/schools/:id/purge', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason, confirmationPhrase } = req.body;
+
+    if (!reason || reason.trim().length < 20) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 20 characters is required for purging' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status !== 'DELETED') {
+      return res.status(400).json({ error: 'Only DELETED schools can be permanently purged' });
+    }
+
+    const expectedPhrase = `PERMANENTLY DELETE ${school.shortName || school.id}`;
+    if (confirmationPhrase !== expectedPhrase) {
+      return res.status(400).json({ error: `Invalid confirmation phrase. Must match exactly: "${expectedPhrase}"` });
+    }
+
+    await prisma.$transaction([
+      prisma.school.update({
+        where: { id },
+        data: {
+          status: 'PURGED',
+          purgedAt: new Date(),
+          purgedBy: operatorId,
+          purgeStatus: 'PENDING',
+        },
+      }),
+      prisma.schoolStatusHistory.create({
+        data: {
+          schoolId: id,
+          fromStatus: 'DELETED',
+          toStatus: 'PURGED',
+          changedBy: operatorId,
+          reason,
+        },
+      }),
+    ]);
+
+    // Trigger background async cleanup job
+    runBackgroundPurge(id);
+
+    return res.json({ status: 'purge_initiated', estimatedCompletionMinutes: 5 });
+  } catch (error: any) {
+    console.error('Error purging school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /v1/platform/schools/:id/history
+app.get('/v1/platform/schools/:id/history', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const history = await prisma.schoolStatusHistory.findMany({
+      where: { schoolId: id },
+      include: {
+        platformOwner: {
+          select: {
+            firstName: true,
+            lastName: true,
+          },
+        },
+      },
+      orderBy: { changedAt: 'desc' },
+    });
+
+    const result = history.map((h) => ({
+      id: h.id,
+      schoolId: h.schoolId,
+      fromStatus: h.fromStatus,
+      toStatus: h.toStatus,
+      reason: h.reason,
+      changedAt: h.changedAt,
+      metadata: h.metadata,
+      operatorName: `${h.platformOwner.firstName} ${h.platformOwner.lastName}`,
+    }));
+
+    return res.json(result);
+  } catch (error: any) {
+    console.error('Error fetching status history:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
