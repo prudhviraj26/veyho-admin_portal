@@ -2,9 +2,24 @@ import React, { useState, useEffect } from 'react';
 import { 
   School, Plus, Search, Mail, Phone, Copy, Check, ShieldAlert, Loader2, X,
   Pause, Play, Archive, RefreshCw, Trash2, History, AlertTriangle, ChevronDown,
-  Calendar, User, FileText
+  Calendar, User, FileText, Lock, LayoutDashboard, Users, GraduationCap, Settings, ClipboardList, Clock, CreditCard, MessageSquare, BarChart3
 } from 'lucide-react';
 import { apiClient } from '../../lib/axios';
+
+const getModuleIcon = (key: string) => {
+  switch (key) {
+    case 'dashboard': return <LayoutDashboard className="w-4 h-4" />;
+    case 'staff': return <Users className="w-4 h-4" />;
+    case 'students': return <GraduationCap className="w-4 h-4" />;
+    case 'settings': return <Settings className="w-4 h-4" />;
+    case 'admissions': return <ClipboardList className="w-4 h-4" />;
+    case 'attendance': return <Clock className="w-4 h-4" />;
+    case 'fees': return <CreditCard className="w-4 h-4" />;
+    case 'communication': return <MessageSquare className="w-4 h-4" />;
+    case 'reports': return <BarChart3 className="w-4 h-4" />;
+    default: return <Settings className="w-4 h-4" />;
+  }
+};
 
 interface SchoolData {
   id: string;
@@ -19,6 +34,13 @@ interface SchoolData {
   studentCount: number;
   staffCount: number;
   classCount: number;
+  groupId?: string | null;
+  admin: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    mobilePrimary: string | null;
+  } | null;
 }
 
 interface NewSchoolCredentials {
@@ -59,6 +81,19 @@ export const SchoolRegistry: React.FC = () => {
   const [credentials, setCredentials] = useState<NewSchoolCredentials | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Reset Password states
+  const [resetSchool, setResetSchool] = useState<SchoolData | null>(null);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetCredentials, setResetCredentials] = useState<{
+    temporaryPassword: string;
+    adminName: string;
+    adminEmail: string;
+    schoolName: string;
+  } | null>(null);
+  const [copiedReset, setCopiedReset] = useState(false);
+
   const [formData, setFormData] = useState({
     name: '',
     phonePrimary: '',
@@ -70,7 +105,7 @@ export const SchoolRegistry: React.FC = () => {
   });
 
   // Lifecycle action state
-  const [actionType, setActionType] = useState<'pause' | 'unpause' | 'archive' | 'unarchive' | 'delete' | 'restore' | 'purge' | null>(null);
+  const [actionType, setActionType] = useState<'pause' | 'unpause' | 'archive' | 'unarchive' | 'delete' | 'restore' | 'purge' | 'retry-purge' | null>(null);
   const [selectedSchool, setSelectedSchool] = useState<SchoolData | null>(null);
   const [actionReason, setActionReason] = useState('');
   const [confirmationInput, setConfirmationInput] = useState('');
@@ -84,6 +119,99 @@ export const SchoolRegistry: React.FC = () => {
 
   // Dropdown states keyed by school ID
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+
+  // Module Entitlements Drawer state
+  interface ModuleItem {
+    moduleKey: string;
+    moduleName: string;
+    isEnabled: boolean;
+    disabledAt: string | null;
+    disabledReason: string | null;
+    isCore?: boolean;
+  }
+
+  const [activeSchool, setActiveSchool] = useState<SchoolData | null>(null);
+  const [drawerTab, setDrawerTab] = useState<'details' | 'modules'>('modules');
+  const [modulesList, setModulesList] = useState<ModuleItem[]>([]);
+  const [loadingModules, setLoadingModules] = useState(false);
+  const [modulesError, setModulesError] = useState<string | null>(null);
+
+  // Disable confirmation modal state
+  const [disablingModule, setDisablingModule] = useState<ModuleItem | null>(null);
+  const [disableReason, setDisableReason] = useState('');
+  const [submittingDisable, setSubmittingDisable] = useState(false);
+  const [disableError, setDisableError] = useState<string | null>(null);
+
+  const fetchModules = async (schoolId: string) => {
+    setLoadingModules(true);
+    setModulesError(null);
+    try {
+      const res = await apiClient.get(`/platform/schools/${schoolId}/modules`);
+      setModulesList(res.data);
+    } catch (err: any) {
+      console.error('Failed to fetch modules', err);
+      setModulesError(err.response?.data?.error || 'Failed to retrieve modules. Please try again.');
+    } finally {
+      setLoadingModules(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSchool) {
+      fetchModules(activeSchool.id);
+      setDrawerTab('modules');
+    }
+  }, [activeSchool]);
+
+  const handleToggleModule = async (module: ModuleItem) => {
+    if (!activeSchool) return;
+
+    if (module.isEnabled) {
+      setDisablingModule(module);
+      setDisableReason('');
+      setDisableError(null);
+    } else {
+      try {
+        const res = await apiClient.patch(
+          `/platform/schools/${activeSchool.id}/modules/${module.moduleKey}`,
+          { isEnabled: true }
+        );
+        setModulesList(res.data);
+      } catch (err: any) {
+        console.error('Failed to enable module', err);
+        alert(err.response?.data?.error || 'Failed to enable module.');
+      }
+    }
+  };
+
+  const handleConfirmDisable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeSchool || !disablingModule) return;
+
+    if (disableReason.trim().length < 10) {
+      setDisableError('Reason must be at least 10 characters.');
+      return;
+    }
+
+    setSubmittingDisable(true);
+    setDisableError(null);
+    try {
+      const res = await apiClient.patch(
+        `/platform/schools/${activeSchool.id}/modules/${disablingModule.moduleKey}`,
+        {
+          isEnabled: false,
+          reason: disableReason.trim()
+        }
+      );
+      setModulesList(res.data);
+      setDisablingModule(null);
+    } catch (err: any) {
+      console.error('Failed to disable module', err);
+      setDisableError(err.response?.data?.error || 'Failed to disable module.');
+    } finally {
+      setSubmittingDisable(false);
+    }
+  };
 
   const fetchSchools = async () => {
     setLoading(true);
@@ -150,6 +278,42 @@ Link: https://schools.veyho.com/login (or local portal)`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const copyResetToClipboard = () => {
+    if (!resetCredentials) return;
+    const text = `Veyho Reset Admin Password Success!
+School: ${resetCredentials.schoolName}
+Admin: ${resetCredentials.adminName}
+Admin Email: ${resetCredentials.adminEmail}
+Temporary Password: ${resetCredentials.temporaryPassword}
+
+Link: https://schools.veyho.com/login (or local portal)`;
+    
+    navigator.clipboard.writeText(text);
+    setCopiedReset(true);
+    setTimeout(() => setCopiedReset(false), 2000);
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetSchool) return;
+    setResettingPassword(true);
+    setResetError(null);
+    try {
+      const res = await apiClient.post(`/platform/schools/${resetSchool.id}/reset-admin-password`);
+      setResetCredentials({
+        temporaryPassword: res.data.temporaryPassword,
+        adminName: `${resetSchool.admin?.firstName || ''} ${resetSchool.admin?.lastName || ''}`.trim(),
+        adminEmail: resetSchool.admin?.email || '',
+        schoolName: resetSchool.name,
+      });
+      setResetConfirmOpen(false);
+    } catch (err: any) {
+      setResetError(err.response?.data?.error || 'Failed to reset admin password.');
+    } finally {
+      setResettingPassword(false);
+    }
   };
 
   const handleLifecycleAction = async (e: React.FormEvent) => {
@@ -259,6 +423,7 @@ Link: https://schools.veyho.com/login (or local portal)`;
       case 'delete': return 'Mark for Deletion';
       case 'restore': return 'Restore to Active';
       case 'purge': return 'Permanently Purge';
+      case 'retry-purge': return 'Retry Purge Operation';
       default: return '';
     }
   };
@@ -333,7 +498,11 @@ Link: https://schools.veyho.com/login (or local portal)`;
                 {filtered.map((s) => {
                   const isDeletedExpired = s.status === 'DELETED' && s.restoreDeadline && new Date() > new Date(s.restoreDeadline);
                   return (
-                    <tr key={s.id} className="hover:bg-zinc-900/10 transition-colors">
+                    <tr 
+                      key={s.id} 
+                      onClick={() => setActiveSchool(s)}
+                      className="hover:bg-zinc-900/30 transition-colors cursor-pointer"
+                    >
                       <td className="p-4">
                         <div className="flex items-center gap-2">
                           <div className="font-semibold text-white text-sm">{s.name}</div>
@@ -346,8 +515,22 @@ Link: https://schools.veyho.com/login (or local portal)`;
                         <div className="text-[10px] text-zinc-500 font-mono mt-0.5">{s.id}</div>
                       </td>
                       <td className="p-4">
-                        <div className="space-y-1">
-                          <div>{getStatusBadge(s)}</div>
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            {getStatusBadge(s)}
+                            {s.status === 'PURGED' && s.purgeStatus === 'FAILED' && (
+                              <button
+                                onClick={() => {
+                                  setSelectedSchool(s);
+                                  setActionType('retry-purge');
+                                }}
+                                className="text-[9px] bg-red-955/80 hover:bg-red-900 text-red-400 hover:text-white font-semibold px-2 py-0.5 rounded border border-red-900/40 transition-colors flex items-center gap-1"
+                              >
+                                <RefreshCw className="w-2.5 h-2.5 animate-spin" style={{ animationDuration: '3s' }} />
+                                Retry Purge
+                              </button>
+                            )}
+                          </div>
                           {s.status === 'DELETED' && s.restoreDeadline && (
                             <div className="text-[10px] text-zinc-500 flex items-center gap-1">
                               <Calendar className="w-3 h-3" />
@@ -359,17 +542,38 @@ Link: https://schools.veyho.com/login (or local portal)`;
                         </div>
                       </td>
                       <td className="p-4 space-y-1">
-                        {s.emailPrimary && (
-                          <div className="flex items-center gap-1.5 text-zinc-400">
-                            <Mail className="w-3.5 h-3.5 text-zinc-600" />
-                            <span>{s.emailPrimary}</span>
-                          </div>
-                        )}
-                        {s.phonePrimary && (
-                          <div className="flex items-center gap-1.5 text-zinc-400">
-                            <Phone className="w-3.5 h-3.5 text-zinc-600" />
-                            <span>{s.phonePrimary}</span>
-                          </div>
+                        {s.admin ? (
+                          <>
+                            <div className="flex items-center gap-1.5 text-white font-medium">
+                              <User className="w-3.5 h-3.5 text-zinc-500" />
+                              <span>{s.admin.firstName} {s.admin.lastName}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-zinc-400">
+                              <Mail className="w-3.5 h-3.5 text-zinc-650" />
+                              <span>{s.admin.email}</span>
+                            </div>
+                            {s.admin.mobilePrimary && (
+                              <div className="flex items-center gap-1.5 text-zinc-400">
+                                <Phone className="w-3.5 h-3.5 text-zinc-655" />
+                                <span>{s.admin.mobilePrimary}</span>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            {s.emailPrimary && (
+                              <div className="flex items-center gap-1.5 text-zinc-400">
+                                <Mail className="w-3.5 h-3.5 text-zinc-600" />
+                                <span>{s.emailPrimary}</span>
+                              </div>
+                            )}
+                            {s.phonePrimary && (
+                              <div className="flex items-center gap-1.5 text-zinc-400">
+                                <Phone className="w-3.5 h-3.5 text-zinc-600" />
+                                <span>{s.phonePrimary}</span>
+                              </div>
+                            )}
+                          </>
                         )}
                       </td>
                       <td className="p-4">
@@ -427,6 +631,17 @@ Link: https://schools.veyho.com/login (or local portal)`;
 
                               {activeDropdown === s.id && (
                                 <div className="absolute right-0 mt-1.5 w-44 bg-zinc-950 border border-zinc-800 rounded-lg shadow-2xl z-20 py-1 font-sans text-left">
+                                  {s.admin && (
+                                    <button
+                                      onClick={() => {
+                                        setResetSchool(s);
+                                        setResetConfirmOpen(true);
+                                      }}
+                                      className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-900 hover:text-white flex items-center gap-2 border-b border-zinc-900"
+                                    >
+                                      <Lock className="w-3.5 h-3.5 text-zinc-500" /> Reset Password
+                                    </button>
+                                  )}
                                   {s.status === 'ACTIVE' && (
                                     <>
                                       <button
@@ -751,6 +966,11 @@ Link: https://schools.veyho.com/login (or local portal)`;
               </div>
 
               {/* Informative warnings */}
+              {actionType === 'retry-purge' && (
+                <div className="p-3 bg-red-950/20 border border-red-900/30 rounded-lg text-[11px] text-red-300/90 leading-normal">
+                  <strong>Warning:</strong> Retrying a purge will restart the permanent data scrubbing job. This is destructive and cannot be undone.
+                </div>
+              )}
               {actionType === 'pause' && (
                 <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-lg text-[11px] text-amber-300/90 leading-normal">
                   <strong>Warning:</strong> Pausing a school blocks all administrative and parent logins. The portal will display a read-only message. Operational data is protected, and standard license billing persists.
@@ -934,6 +1154,396 @@ Link: https://schools.veyho.com/login (or local portal)`;
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Confirmation Modal */}
+      {resetConfirmOpen && resetSchool && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => { setResetConfirmOpen(false); setResetSchool(null); setResetError(null); }} />
+          
+          <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-6 overflow-hidden">
+            <button
+              onClick={() => { setResetConfirmOpen(false); setResetSchool(null); setResetError(null); }}
+              className="absolute right-4 top-4 text-zinc-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <form onSubmit={handleResetPassword} className="space-y-4">
+              <div className="flex gap-3 mb-2">
+                <div className="p-2.5 rounded-lg shrink-0 bg-blue-950/50 text-blue-400 border border-blue-900/40">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Reset Admin Password</h3>
+                  <p className="text-zinc-500 text-xs mt-0.5">
+                    Reset password for <strong className="text-zinc-300">{resetSchool.admin?.firstName} {resetSchool.admin?.lastName}</strong> at <strong className="text-zinc-300">{resetSchool.name}</strong>?
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-3 bg-blue-950/20 border border-blue-900/30 rounded-lg text-[11px] text-blue-300/90 leading-normal">
+                A new temporary password will be generated and displayed once. Share it directly with the admin.
+              </div>
+
+              {resetError && (
+                <div className="p-3 bg-red-950/40 border border-red-900/40 rounded-lg text-red-400 text-xs">
+                  {resetError}
+                </div>
+              )}
+
+              <div className="pt-4 flex items-center justify-end gap-3 border-t border-zinc-800/40">
+                <button
+                  type="button"
+                  onClick={() => { setResetConfirmOpen(false); setResetSchool(null); setResetError(null); }}
+                  className="px-4 py-2 border border-zinc-800 rounded-lg hover:bg-zinc-850 text-zinc-400 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={resettingPassword}
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 disabled:opacity-55"
+                >
+                  {resettingPassword ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Resetting...</span>
+                    </>
+                  ) : (
+                    <span>Reset Password</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Success Modal */}
+      {resetCredentials && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={() => { setResetCredentials(null); }} />
+          
+          <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-6 overflow-hidden">
+            <button
+              onClick={() => { setResetCredentials(null); }}
+              className="absolute right-4 top-4 text-zinc-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-5">
+              <div className="text-center space-y-2">
+                <div className="w-12 h-12 rounded-full bg-emerald-950/40 border border-emerald-900 text-emerald-400 flex items-center justify-center mx-auto mb-2">
+                  <Check className="w-6 h-6" />
+                </div>
+                <h3 className="text-lg font-bold text-white">Password Reset Successful!</h3>
+                <p className="text-zinc-500 text-xs">A new temporary password has been generated.</p>
+              </div>
+
+              <div className="p-4 bg-zinc-950/80 border border-zinc-850 rounded-lg space-y-3 font-mono text-xs">
+                <div>
+                  <span className="text-zinc-500 text-[10px] block uppercase">School</span>
+                  <span className="text-zinc-200">{resetCredentials.schoolName}</span>
+                </div>
+                <div>
+                  <span className="text-zinc-500 text-[10px] block uppercase">Admin Name</span>
+                  <span className="text-zinc-200">{resetCredentials.adminName}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <span className="text-zinc-500 text-[10px] block uppercase">Admin Username</span>
+                    <span className="text-zinc-200 select-all">{resetCredentials.adminEmail}</span>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500 text-[10px] block uppercase">Temporary Password</span>
+                    <span className="text-amber-400 font-bold select-all">{resetCredentials.temporaryPassword}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-950/30 border border-amber-900/30 rounded-lg flex gap-2.5 text-[11px] text-amber-300 leading-relaxed">
+                <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Important:</strong> Copy this password now. It will not be shown again and the admin must change it upon logging in.
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={copyResetToClipboard}
+                  className="flex-1 py-2.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all"
+                >
+                  {copiedReset ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-400" />
+                      <span>Copied to Clipboard</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4 text-zinc-400" />
+                      <span>Copy Credentials</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => setResetCredentials(null)}
+                  className="px-6 py-2.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* School Details & Modules Drawer */}
+      {activeSchool && (
+        <div className="fixed inset-0 z-40 overflow-hidden">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-xs transition-opacity" onClick={() => setActiveSchool(null)} />
+          
+          <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
+            <div className="w-screen max-w-md">
+              <div className="h-full flex flex-col bg-zinc-950 border-l border-zinc-850 shadow-2xl">
+                {/* Header */}
+                <div className="p-6 border-b border-zinc-850">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-bold text-white flex items-center gap-2">
+                        <School className="w-4 h-4 text-sky-400" />
+                        School Management
+                      </h3>
+                      <p className="text-zinc-500 text-xs mt-0.5">{activeSchool.name}</p>
+                    </div>
+                    <button
+                      onClick={() => setActiveSchool(null)}
+                      className="p-1 text-zinc-400 hover:text-white rounded hover:bg-zinc-900 transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  {/* Tabs Selector */}
+                  <div className="flex border-b border-zinc-850 mt-5 -mb-6">
+                    <button
+                      onClick={() => setDrawerTab('modules')}
+                      className={`flex-1 pb-3 text-xs font-semibold border-b-2 transition-colors ${
+                        drawerTab === 'modules' ? 'border-sky-500 text-sky-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      Module Entitlements
+                    </button>
+                    <button
+                      onClick={() => setDrawerTab('details')}
+                      className={`flex-1 pb-3 text-xs font-semibold border-b-2 transition-colors ${
+                        drawerTab === 'details' ? 'border-sky-500 text-sky-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                      }`}
+                    >
+                      General Details
+                    </button>
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto p-6">
+                  {drawerTab === 'modules' ? (
+                    <div className="space-y-4">
+                      {loadingModules ? (
+                        <div className="flex flex-col items-center justify-center h-48 gap-3 text-zinc-500 text-xs font-mono">
+                          <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+                          RETRIEVING MODULES...
+                        </div>
+                      ) : modulesError ? (
+                        <div className="text-center py-12 text-red-400 text-xs font-semibold">
+                          {modulesError}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {modulesList.map((mod) => {
+                            const isCore = mod.isCore;
+                            return (
+                              <div
+                                key={mod.moduleKey}
+                                className={`p-4 border rounded-xl flex items-center justify-between transition-all ${
+                                  isCore
+                                    ? 'bg-zinc-900/20 border-zinc-850/40 opacity-55'
+                                    : mod.isEnabled
+                                    ? 'bg-zinc-900/40 border-zinc-850 hover:border-zinc-800'
+                                    : 'bg-red-950/5 border-red-900/10'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className={`p-2 rounded-lg ${
+                                    isCore ? 'bg-zinc-900 text-zinc-500' : mod.isEnabled ? 'bg-sky-950/30 text-sky-400' : 'bg-red-950/20 text-red-400'
+                                  }`}>
+                                    {getModuleIcon(mod.moduleKey)}
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-xs font-bold text-white">{mod.moduleName}</span>
+                                      {isCore ? (
+                                        <span className="text-[9px] text-zinc-500 font-medium px-1.5 py-0.5 rounded bg-zinc-900/60 uppercase tracking-wider">
+                                          Core
+                                        </span>
+                                      ) : mod.isEnabled ? (
+                                        <span className="text-[9px] text-emerald-400 font-medium px-1.5 py-0.5 rounded bg-emerald-950/20 uppercase tracking-wider">
+                                          Active
+                                        </span>
+                                      ) : (
+                                        <span className="text-[9px] text-red-450 font-medium px-1.5 py-0.5 rounded bg-red-950/30 uppercase tracking-wider">
+                                          Disabled
+                                        </span>
+                                      )}
+                                    </div>
+                                    {isCore ? (
+                                      <p className="text-[10px] text-zinc-500 mt-0.5 font-medium">Core — always enabled</p>
+                                    ) : !mod.isEnabled ? (
+                                      <div className="mt-1 space-y-0.5 text-[9px] text-zinc-500 leading-normal">
+                                        <p className="font-semibold text-red-300/80">Reason: {mod.disabledReason}</p>
+                                        {mod.disabledAt && (
+                                          <p>Disabled on: {new Date(mod.disabledAt).toLocaleDateString()}</p>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <p className="text-[10px] text-zinc-500 mt-0.5">Toggle to control access</p>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {!isCore && (
+                                  <button
+                                    onClick={() => handleToggleModule(mod)}
+                                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                      mod.isEnabled ? 'bg-sky-500' : 'bg-zinc-800'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                                        mod.isEnabled ? 'translate-x-4' : 'translate-x-0'
+                                      }`}
+                                    />
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      <div className="space-y-4">
+                        <div>
+                          <span className="text-[10px] text-zinc-500 uppercase font-mono block">School ID</span>
+                          <span className="text-zinc-200 text-xs font-mono select-all bg-zinc-900 px-2 py-1 rounded border border-zinc-850 mt-1 block w-fit">{activeSchool.id}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-zinc-500 uppercase font-mono block">Group ID</span>
+                          <span className="text-zinc-200 text-xs font-mono select-all bg-zinc-900 px-2 py-1 rounded border border-zinc-850 mt-1 block w-fit">{activeSchool.groupId || 'None'}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-zinc-500 uppercase font-mono block">Status</span>
+                          <div className="mt-1">{getStatusBadge(activeSchool)}</div>
+                        </div>
+                        {activeSchool.admin && (
+                          <div className="pt-4 border-t border-zinc-850 space-y-3">
+                            <h4 className="text-xs font-bold text-zinc-400">Primary Contact (Admin)</h4>
+                            <div>
+                              <span className="text-[10px] text-zinc-500 uppercase font-mono block">Name</span>
+                              <span className="text-zinc-200 text-xs">{activeSchool.admin.firstName} {activeSchool.admin.lastName}</span>
+                            </div>
+                            <div>
+                              <span className="text-[10px] text-zinc-555 uppercase font-mono block">Email</span>
+                              <span className="text-zinc-200 text-xs">{activeSchool.admin.email}</span>
+                            </div>
+                            {activeSchool.admin.mobilePrimary && (
+                              <div>
+                                <span className="text-[10px] text-zinc-555 uppercase font-mono block">Mobile</span>
+                                <span className="text-zinc-200 text-xs">{activeSchool.admin.mobilePrimary}</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disable Module Confirmation Modal */}
+      {disablingModule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/85 backdrop-blur-xs" onClick={() => setDisablingModule(null)} />
+          
+          <div className="relative bg-zinc-950 border border-zinc-850 rounded-xl max-w-md w-full shadow-2xl p-6 overflow-hidden z-10">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="p-2 bg-red-950/30 text-red-400 rounded-lg shrink-0">
+                <Lock className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Disable {disablingModule.moduleName}?</h3>
+                <p className="text-zinc-400 text-xs mt-1 leading-normal">
+                  Disabling this module locks access for the School Admin and staff at <strong>{activeSchool?.name}</strong>. Existing data remains safe and preserved.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmDisable} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block">
+                  Disable Reason <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  required
+                  value={disableReason}
+                  onChange={(e) => setDisableReason(e.target.value)}
+                  placeholder="e.g. Disabling the module due to client's plan downgrade."
+                  rows={3}
+                  className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2.5 text-zinc-300 focus:outline-none focus:border-red-500 text-xs placeholder-zinc-700"
+                />
+                <p className="text-[10px] text-zinc-600">Minimum 10 characters required.</p>
+              </div>
+
+              {disableError && (
+                <div className="p-3 bg-red-950/20 border border-red-900/30 rounded-lg text-xs text-red-300/90 font-medium">
+                  {disableError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-zinc-850">
+                <button
+                  type="button"
+                  onClick={() => setDisablingModule(null)}
+                  className="px-4 py-2 border border-zinc-800 rounded-lg hover:bg-zinc-850 text-zinc-400 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingDisable || disableReason.trim().length < 10}
+                  className="px-4 py-2 bg-red-650 hover:bg-red-550 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 disabled:opacity-55"
+                >
+                  {submittingDisable ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Disabling...</span>
+                    </>
+                  ) : (
+                    <span>Disable Module</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

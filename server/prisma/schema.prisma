@@ -40,6 +40,7 @@ model School {
   purgedBy               String?                 @map("purged_by") @db.Uuid
   purgeStatus            String?                 @map("purge_status") @db.VarChar(20)
   statusHistory          SchoolStatusHistory[]
+  moduleEntitlements     SchoolModuleEntitlement[]
 
   // School Information
   schoolType             String? @map("school_type") @db.VarChar(30)
@@ -1226,5 +1227,24 @@ enum SchoolStatus {
   ARCHIVED
   DELETED
   PURGED
+}
+
+model SchoolModuleEntitlement {
+  id             String    @id @default(uuid()) @db.Uuid
+  schoolId       String    @map("school_id") @db.Uuid
+  moduleKey      String    @map("module_key") @db.VarChar(50)
+  isEnabled      Boolean   @default(true) @map("is_enabled")
+  enabledAt      DateTime? @map("enabled_at")
+  disabledAt     DateTime? @map("disabled_at")
+  disabledReason String?   @map("disabled_reason") @db.Text
+  changedBy      String?   @map("changed_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  school         School    @relation(fields: [schoolId], references: [id])
+
+  @@unique([schoolId, moduleKey])
+  @@index([schoolId])
+  @@map("school_module_entitlements")
 }
 

@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
+import Redis from 'ioredis';
 import prisma from './prisma';
 import { requireAuth, AuthenticatedRequest } from './middleware/auth';
 
@@ -11,6 +13,14 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'veyho_admin_portal_local_secret_key_1293847';
+
+const redisUrl = process.env.REDIS_URL;
+const redis = redisUrl ? new Redis(redisUrl) : null;
+if (redis) {
+  console.log('[Redis] Connected to Redis for Cache Invalidation');
+} else {
+  console.log('[Redis] REDIS_URL not configured. Cache invalidation is disabled.');
+}
 
 app.use(cors({
   origin: true,
@@ -119,24 +129,49 @@ app.get('/v1/platform/schools', requireAuth, async (req, res) => {
             classes: true,
           },
         },
+        staffRoles: {
+          where: {
+            role: 'school_admin',
+          },
+          include: {
+            staff: {
+              select: {
+                firstName: true,
+                lastName: true,
+                email: true,
+                mobilePrimary: true,
+              },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    const result = schools.map((school) => ({
-      id: school.id,
-      name: school.name,
-      shortName: school.shortName,
-      status: school.status,
-      restoreDeadline: school.restoreDeadline,
-      purgeStatus: school.purgeStatus,
-      createdAt: school.createdAt,
-      phonePrimary: school.phonePrimary,
-      emailPrimary: school.emailPrimary,
-      studentCount: school._count.students,
-      staffCount: school._count.staffRoles,
-      classCount: school._count.classes,
-    }));
+    const result = schools.map((school) => {
+      const adminRole = school.staffRoles[0];
+      const adminStaff = adminRole?.staff;
+      return {
+        id: school.id,
+        name: school.name,
+        shortName: school.shortName,
+        status: school.status,
+        restoreDeadline: school.restoreDeadline,
+        purgeStatus: school.purgeStatus,
+        createdAt: school.createdAt,
+        phonePrimary: school.phonePrimary,
+        emailPrimary: school.emailPrimary,
+        studentCount: school._count.students,
+        staffCount: school._count.staffRoles,
+        classCount: school._count.classes,
+        admin: adminStaff ? {
+          firstName: adminStaff.firstName,
+          lastName: adminStaff.lastName,
+          email: adminStaff.email,
+          mobilePrimary: adminStaff.mobilePrimary,
+        } : null,
+      };
+    });
 
     return res.json(result);
   } catch (error: any) {
@@ -184,6 +219,15 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
         phonePrimary: dto.phonePrimary || null,
         emailPrimary: dto.emailPrimary || null,
       },
+    });
+
+    // Create Module Entitlements
+    await prisma.schoolModuleEntitlement.createMany({
+      data: ['admissions', 'attendance', 'fees', 'communication', 'reports'].map(moduleKey => ({
+        schoolId: school.id,
+        moduleKey,
+        isEnabled: true,
+      })),
     });
 
     // Generate Temporary Password
@@ -844,6 +888,97 @@ app.post('/v1/platform/schools/:id/purge', requireAuth, async (req: Authenticate
   }
 });
 
+// POST /v1/platform/schools/:id/retry-purge
+app.post('/v1/platform/schools/:id/retry-purge', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({ error: 'A valid audit reason of at least 10 characters is required' });
+    }
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    if (school.status !== 'PURGED' || school.purgeStatus !== 'FAILED') {
+      return res.status(400).json({ error: 'Purge status is not FAILED' });
+    }
+
+    await prisma.school.update({
+      where: { id },
+      data: {
+        purgeStatus: 'PENDING',
+      },
+    });
+
+    // Trigger background async cleanup job again
+    runBackgroundPurge(id);
+
+    return res.json({ status: 'purge_initiated', estimatedCompletionMinutes: 5 });
+  } catch (error: any) {
+    console.error('Error retrying purge:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /v1/platform/schools/:id/reset-admin-password
+app.post('/v1/platform/schools/:id/reset-admin-password', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    // Find the School Admin staff record for this school
+    const schoolAdminRole = await prisma.staffSchoolRole.findFirst({
+      where: {
+        schoolId: id,
+        role: 'school_admin',
+      },
+      include: {
+        staff: true,
+      },
+    });
+
+    if (!schoolAdminRole || !schoolAdminRole.staff) {
+      return res.status(404).json({ error: 'School admin not found for this school' });
+    }
+
+    const staffId = schoolAdminRole.staffId;
+
+    // Generate secure random 12-character temporary password
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#%';
+    let temporaryPassword = '';
+    for (let i = 0; i < 12; i++) {
+      temporaryPassword += chars.charAt(crypto.randomInt(0, chars.length));
+    }
+
+    // Hash it and update the staff record
+    const passwordHash = await bcrypt.hash(temporaryPassword, 12);
+    await prisma.staff.update({
+      where: { id: staffId },
+      data: {
+        passwordHash,
+        mustChangePassword: true,
+      },
+    });
+
+    console.log(`[PLATFORM] Reset password for staff ${staffId} (school admin of school ${id})`);
+
+    return res.json({ temporaryPassword });
+  } catch (error: any) {
+    console.error('Error resetting admin password:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /v1/platform/schools/:id/history
 app.get('/v1/platform/schools/:id/history', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
@@ -878,6 +1013,149 @@ app.get('/v1/platform/schools/:id/history', requireAuth, async (req: Authenticat
     return res.json(result);
   } catch (error: any) {
     console.error('Error fetching status history:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /v1/platform/schools/:id/modules
+app.get('/v1/platform/schools/:id/modules', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id } = req.params;
+
+    const school = await prisma.school.findUnique({ where: { id } });
+    if (!school) return res.status(404).json({ error: 'School not found' });
+
+    const entitlements = await prisma.schoolModuleEntitlement.findMany({
+      where: { schoolId: id },
+    });
+
+    const controllableKeys = ['admissions', 'attendance', 'fees', 'communication', 'reports'];
+    const coreKeys = ['dashboard', 'staff', 'students', 'settings'];
+
+    const getModuleName = (key: string) => key.charAt(0).toUpperCase() + key.slice(1);
+
+    const controllableModules = controllableKeys.map(key => {
+      const ent = entitlements.find(e => e.moduleKey === key);
+      return {
+        moduleKey: key,
+        moduleName: getModuleName(key),
+        isEnabled: ent ? ent.isEnabled : true,
+        disabledAt: ent ? ent.disabledAt : null,
+        disabledReason: ent ? ent.disabledReason : null,
+      };
+    });
+
+    const coreModules = coreKeys.map(key => ({
+      moduleKey: key,
+      moduleName: getModuleName(key),
+      isEnabled: true,
+      disabledAt: null,
+      disabledReason: null,
+      isCore: true,
+    }));
+
+    return res.json([...controllableModules, ...coreModules]);
+  } catch (error: any) {
+    console.error('Error fetching modules:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PATCH /v1/platform/schools/:id/modules/:moduleKey
+app.patch('/v1/platform/schools/:id/modules/:moduleKey', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const operatorId = req.user?.id;
+    if (!operatorId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { id, moduleKey } = req.params;
+    const { isEnabled, reason } = req.body;
+
+    const controllableKeys = ['admissions', 'attendance', 'fees', 'communication', 'reports'];
+    if (!controllableKeys.includes(moduleKey)) {
+      return res.status(400).json({ error: 'Invalid module key. Only admissions, attendance, fees, communication, and reports can be toggled.' });
+    }
+
+    if (isEnabled === undefined || typeof isEnabled !== 'boolean') {
+      return res.status(400).json({ error: 'isEnabled must be a boolean' });
+    }
+
+    if (!isEnabled) {
+      if (!reason || typeof reason !== 'string' || reason.trim().length < 10) {
+        return res.status(400).json({ error: 'A disable reason of at least 10 characters is required' });
+      }
+    }
+
+    const now = new Date();
+    await prisma.schoolModuleEntitlement.upsert({
+      where: {
+        schoolId_moduleKey: {
+          schoolId: id,
+          moduleKey,
+        },
+      },
+      update: {
+        isEnabled,
+        enabledAt: isEnabled ? now : undefined,
+        disabledAt: !isEnabled ? now : undefined,
+        disabledReason: !isEnabled ? reason.trim() : null,
+        changedBy: operatorId,
+      },
+      create: {
+        schoolId: id,
+        moduleKey,
+        isEnabled,
+        enabledAt: isEnabled ? now : null,
+        disabledAt: !isEnabled ? now : null,
+        disabledReason: !isEnabled ? reason.trim() : null,
+        changedBy: operatorId,
+      },
+    });
+
+    // Invalidate Redis cache synchronously
+    if (redis) {
+      const cacheKey = `module_entitlements:${id}`;
+      try {
+        await redis.del(cacheKey);
+        console.log(`[Redis] Synchronously invalidated cache key: ${cacheKey}`);
+      } catch (err) {
+        console.error(`[Redis] Failed to delete cache key ${cacheKey}:`, err);
+      }
+    }
+
+    // Return updated module list
+    const entitlements = await prisma.schoolModuleEntitlement.findMany({
+      where: { schoolId: id },
+    });
+
+    const coreKeys = ['dashboard', 'staff', 'students', 'settings'];
+    const getModuleName = (key: string) => key.charAt(0).toUpperCase() + key.slice(1);
+
+    const controllableModules = controllableKeys.map(key => {
+      const ent = entitlements.find(e => e.moduleKey === key);
+      return {
+        moduleKey: key,
+        moduleName: getModuleName(key),
+        isEnabled: ent ? ent.isEnabled : true,
+        disabledAt: ent ? ent.disabledAt : null,
+        disabledReason: ent ? ent.disabledReason : null,
+      };
+    });
+
+    const coreModules = coreKeys.map(key => ({
+      moduleKey: key,
+      moduleName: getModuleName(key),
+      isEnabled: true,
+      disabledAt: null,
+      disabledReason: null,
+      isCore: true,
+    }));
+
+    return res.json([...controllableModules, ...coreModules]);
+  } catch (error: any) {
+    console.error('Error updating module:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
