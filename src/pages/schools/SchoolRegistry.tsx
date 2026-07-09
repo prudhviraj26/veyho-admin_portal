@@ -17,6 +17,7 @@ const getModuleIcon = (key: string) => {
     case 'fees': return <CreditCard className="w-4 h-4" />;
     case 'communication': return <MessageSquare className="w-4 h-4" />;
     case 'reports': return <BarChart3 className="w-4 h-4" />;
+    case 'certificates': return <FileText className="w-4 h-4" />;
     default: return <Settings className="w-4 h-4" />;
   }
 };

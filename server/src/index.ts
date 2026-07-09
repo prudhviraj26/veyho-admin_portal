@@ -223,7 +223,7 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
 
     // Create Module Entitlements
     await prisma.schoolModuleEntitlement.createMany({
-      data: ['admissions', 'attendance', 'fees', 'communication', 'reports'].map(moduleKey => ({
+      data: ['admissions', 'attendance', 'fees', 'communication', 'reports', 'certificates'].map(moduleKey => ({
         schoolId: school.id,
         moduleKey,
         isEnabled: true,
@@ -1032,7 +1032,7 @@ app.get('/v1/platform/schools/:id/modules', requireAuth, async (req: Authenticat
       where: { schoolId: id },
     });
 
-    const controllableKeys = ['admissions', 'attendance', 'fees', 'communication', 'reports'];
+    const controllableKeys = ['admissions', 'attendance', 'fees', 'communication', 'reports', 'certificates'];
     const coreKeys = ['dashboard', 'staff', 'students', 'settings'];
 
     const getModuleName = (key: string) => key.charAt(0).toUpperCase() + key.slice(1);
@@ -1073,9 +1073,9 @@ app.patch('/v1/platform/schools/:id/modules/:moduleKey', requireAuth, async (req
     const { id, moduleKey } = req.params;
     const { isEnabled, reason } = req.body;
 
-    const controllableKeys = ['admissions', 'attendance', 'fees', 'communication', 'reports'];
+    const controllableKeys = ['admissions', 'attendance', 'fees', 'communication', 'reports', 'certificates'];
     if (!controllableKeys.includes(moduleKey)) {
-      return res.status(400).json({ error: 'Invalid module key. Only admissions, attendance, fees, communication, and reports can be toggled.' });
+      return res.status(400).json({ error: 'Invalid module key. Only admissions, attendance, fees, communication, reports, and certificates can be toggled.' });
     }
 
     if (isEnabled === undefined || typeof isEnabled !== 'boolean') {
