@@ -161,6 +161,7 @@ app.get('/v1/platform/schools', requireAuth, async (req, res) => {
         createdAt: school.createdAt,
         phonePrimary: school.phonePrimary,
         emailPrimary: school.emailPrimary,
+        maxStudents: school.maxStudents,
         studentCount: school._count.students,
         staffCount: school._count.staffRoles,
         classCount: school._count.classes,
@@ -211,6 +212,10 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
       },
     });
 
+    const parsedMaxStudents = dto.maxStudents !== undefined && dto.maxStudents !== null && dto.maxStudents !== ''
+      ? parseInt(String(dto.maxStudents), 10)
+      : null;
+
     // Create School
     const school = await prisma.school.create({
       data: {
@@ -218,6 +223,7 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
         name: dto.name,
         phonePrimary: dto.phonePrimary || null,
         emailPrimary: dto.emailPrimary || null,
+        maxStudents: isNaN(parsedMaxStudents as number) ? null : parsedMaxStudents,
       },
     });
 
@@ -264,6 +270,7 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
       school: {
         id: school.id,
         name: school.name,
+        maxStudents: school.maxStudents,
         createdAt: school.createdAt,
       },
       admin: {
@@ -277,6 +284,36 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
     });
   } catch (error: any) {
     console.error('Error registering school:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update Student Cap for a School
+app.patch('/v1/platform/schools/:id/student-cap', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { maxStudents } = req.body;
+
+    const parsedMax = maxStudents !== undefined && maxStudents !== null && maxStudents !== ''
+      ? parseInt(String(maxStudents), 10)
+      : null;
+
+    if (parsedMax !== null && (isNaN(parsedMax) || parsedMax < 0)) {
+      return res.status(400).json({ error: 'Student cap must be a non-negative integer or null for unlimited.' });
+    }
+
+    const school = await prisma.school.update({
+      where: { id },
+      data: { maxStudents: parsedMax },
+    });
+
+    return res.json({
+      success: true,
+      schoolId: school.id,
+      maxStudents: school.maxStudents,
+    });
+  } catch (error: any) {
+    console.error('Error updating student cap:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });

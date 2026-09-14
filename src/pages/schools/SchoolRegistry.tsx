@@ -32,6 +32,7 @@ interface SchoolData {
   createdAt: string;
   phonePrimary: string | null;
   emailPrimary: string | null;
+  maxStudents: number | null;
   studentCount: number;
   staffCount: number;
   classCount: number;
@@ -82,6 +83,13 @@ export const SchoolRegistry: React.FC = () => {
   const [credentials, setCredentials] = useState<NewSchoolCredentials | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Edit Cap states
+  const [capSchool, setCapSchool] = useState<SchoolData | null>(null);
+  const [capModalOpen, setCapModalOpen] = useState(false);
+  const [capValue, setCapValue] = useState<string>('');
+  const [updatingCap, setUpdatingCap] = useState(false);
+  const [capError, setCapError] = useState<string | null>(null);
+
   // Reset Password states
   const [resetSchool, setResetSchool] = useState<SchoolData | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
@@ -99,6 +107,7 @@ export const SchoolRegistry: React.FC = () => {
     name: '',
     phonePrimary: '',
     emailPrimary: '',
+    maxStudents: '',
     adminFirstName: '',
     adminLastName: '',
     adminEmail: '',
@@ -251,6 +260,7 @@ export const SchoolRegistry: React.FC = () => {
         name: '',
         phonePrimary: '',
         emailPrimary: '',
+        maxStudents: '',
         adminFirstName: '',
         adminLastName: '',
         adminEmail: '',
@@ -261,6 +271,26 @@ export const SchoolRegistry: React.FC = () => {
       setFormError(Array.isArray(msg) ? msg.join(', ') : msg);
     } finally {
       setRegistering(false);
+    }
+  };
+
+  const handleUpdateCap = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!capSchool) return;
+    setUpdatingCap(true);
+    setCapError(null);
+
+    try {
+      await apiClient.patch(`/platform/schools/${capSchool.id}/student-cap`, {
+        maxStudents: capValue.trim() === '' ? null : parseInt(capValue, 10),
+      });
+      setCapModalOpen(false);
+      setCapSchool(null);
+      fetchSchools();
+    } catch (err: any) {
+      setCapError(err.response?.data?.error || 'Failed to update student cap.');
+    } finally {
+      setUpdatingCap(false);
     }
   };
 
@@ -581,7 +611,12 @@ Link: https://schools.veyho.com/login (or local portal)`;
                         <div className="flex gap-4">
                           <div>
                             <span className="text-[10px] text-zinc-500 uppercase font-mono block">Students</span>
-                            <span className="text-zinc-200 font-semibold">{s.studentCount}</span>
+                            <span className="text-zinc-200 font-semibold">
+                              {s.studentCount}
+                              <span className="text-zinc-500 text-xs font-normal ml-0.5">
+                                {s.maxStudents !== null && s.maxStudents !== undefined ? `/ ${s.maxStudents}` : ' (Cap: ∞)'}
+                              </span>
+                            </span>
                           </div>
                           <div>
                             <span className="text-[10px] text-zinc-500 uppercase font-mono block">Staff</span>
@@ -632,11 +667,23 @@ Link: https://schools.veyho.com/login (or local portal)`;
 
                               {activeDropdown === s.id && (
                                 <div className="absolute right-0 mt-1.5 w-44 bg-zinc-950 border border-zinc-800 rounded-lg shadow-2xl z-20 py-1 font-sans text-left">
+                                  <button
+                                    onClick={() => {
+                                      setCapSchool(s);
+                                      setCapValue(s.maxStudents !== null && s.maxStudents !== undefined ? String(s.maxStudents) : '');
+                                      setCapModalOpen(true);
+                                      setActiveDropdown(null);
+                                    }}
+                                    className="w-full text-left px-3 py-2 text-xs text-sky-400 hover:bg-sky-950/30 flex items-center gap-2 border-b border-zinc-900"
+                                  >
+                                    <GraduationCap className="w-3.5 h-3.5" /> Edit Student Cap
+                                  </button>
                                   {s.admin && (
                                     <button
                                       onClick={() => {
                                         setResetSchool(s);
                                         setResetConfirmOpen(true);
+                                        setActiveDropdown(null);
                                       }}
                                       className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-900 hover:text-white flex items-center gap-2 border-b border-zinc-900"
                                     >
@@ -790,6 +837,22 @@ Link: https://schools.veyho.com/login (or local portal)`;
                         className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2.5 text-zinc-300 focus:outline-none focus:border-sky-500 text-xs"
                       />
                     </div>
+                  </div>
+
+                  {/* Student Cap */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider block flex items-center justify-between">
+                      <span>Max Student Capacity (Cap)</span>
+                      <span className="text-[10px] text-zinc-500 font-normal">Leave empty for unlimited</span>
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.maxStudents}
+                      onChange={(e) => setFormData({ ...formData, maxStudents: e.target.value })}
+                      placeholder="e.g. 500 (or blank for no limit)"
+                      className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2.5 text-zinc-300 focus:outline-none focus:border-sky-500 text-xs font-mono"
+                    />
                   </div>
 
                   <div className="pt-2 border-t border-zinc-800 mt-2">
@@ -1541,6 +1604,86 @@ Link: https://schools.veyho.com/login (or local portal)`;
                     </>
                   ) : (
                     <span>Disable Module</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Student Cap Modal */}
+      {capModalOpen && capSchool && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+            <button
+              onClick={() => {
+                setCapModalOpen(false);
+                setCapSchool(null);
+              }}
+              className="absolute top-4 right-4 text-zinc-500 hover:text-zinc-300"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-sky-950/60 border border-sky-900 text-sky-400 flex items-center justify-center">
+                <GraduationCap className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-white text-base">Edit Student Capacity</h3>
+                <p className="text-xs text-zinc-400">{capSchool.name}</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleUpdateCap} className="space-y-4 pt-2">
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider block flex items-center justify-between">
+                  <span>Maximum Active Students (Cap)</span>
+                  <span className="text-[10px] text-zinc-500 font-normal">Leave blank for unlimited</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={capValue}
+                  onChange={(e) => setCapValue(e.target.value)}
+                  placeholder="e.g. 500 (or leave empty)"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2.5 text-white focus:outline-none focus:border-sky-500 text-xs font-mono"
+                />
+                <p className="text-[10px] text-zinc-500">
+                  Current active students: <strong className="text-zinc-300">{capSchool.studentCount}</strong>
+                </p>
+              </div>
+
+              {capError && (
+                <div className="p-3 bg-red-950/40 border border-red-800/40 rounded-lg text-red-400 text-xs">
+                  {capError}
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCapModalOpen(false);
+                    setCapSchool(null);
+                  }}
+                  className="px-4 py-2 border border-zinc-800 rounded-lg hover:bg-zinc-850 text-zinc-400 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updatingCap}
+                  className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 disabled:opacity-55"
+                >
+                  {updatingCap ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Student Cap</span>
                   )}
                 </button>
               </div>

@@ -23,7 +23,7 @@ model School {
   id             String  @id @default(uuid()) @db.Uuid
   groupId        String  @map("group_id") @db.Uuid
   name           String  @db.VarChar(300)
-  shortName      String? @map("short_name") @db.VarChar(10)
+  shortName      String? @map("short_name") @db.VarChar(100)
   logoBlobPath   String? @map("logo_blob_path") @db.VarChar(500)
   primaryColor   String  @default("#1F4E78") @map("primary_color") @db.VarChar(7)
   secondaryColor String? @map("secondary_color") @db.VarChar(7)
@@ -50,6 +50,16 @@ model School {
   udiseCode              String? @map("udise_code") @db.VarChar(11)
   principalName          String? @map("principal_name") @db.VarChar(200)
 
+  // Registration & Certificate Details
+  udiseNumber        String?   @map("udise_number") @db.VarChar(100)
+  registrationNumber String?   @map("registration_number") @db.VarChar(100)
+  affiliationNumber  String?   @map("affiliation_number") @db.VarChar(100)
+  boardLocation      String?   @map("board_location") @db.VarChar(200)
+  recognitionNumber  String?   @map("recognition_number") @db.VarChar(100)
+  trustName          String?   @map("trust_name") @db.VarChar(300)
+  schoolMobile       String?   @map("school_mobile") @db.VarChar(20)
+  schoolEmail        String?   @map("school_email") @db.VarChar(255)
+
   // Contact Details
   phonePrimary   String? @map("phone_primary") @db.VarChar(20)
   phoneSecondary String? @map("phone_secondary") @db.VarChar(20)
@@ -58,6 +68,8 @@ model School {
   addressLine1   String? @map("address_line_1")
   addressLine2   String? @map("address_line_2")
   city           String? @db.VarChar(100)
+  taluka         String? @db.VarChar(100)
+  district       String? @db.VarChar(100)
   state          String? @db.VarChar(100)
   pincode        String? @db.VarChar(6)
 
@@ -78,6 +90,9 @@ model School {
 
   // Feature Toggles
   staffAttendanceEnabled Boolean @default(false) @map("staff_attendance_enabled")
+
+  // Limits / Entitlements
+  maxStudents Int? @map("max_students")
 
   createdAt              DateTime                @default(now()) @map("created_at")
   updatedAt              DateTime                @updatedAt @map("updated_at")
@@ -105,6 +120,8 @@ model School {
   notificationRules      NotificationRule[]
   promotionRuns          PromotionRun[]
   supportAccessGrants    SupportAccessGrant[]
+  certificates           Certificate[]
+
 
   @@map("schools")
 }
@@ -299,6 +316,7 @@ model AdmissionStatusHistory {
 model FamilyGroup {
   id               String          @id @default(uuid()) @db.Uuid
   schoolId         String          @map("school_id") @db.Uuid
+  // Family-level fields (optional, mostly used in Phase 2 reports)
   familyName       String?         @map("family_name") @db.VarChar(200)
   notes            String?         @db.Text
   createdAt        DateTime        @default(now()) @map("created_at")
@@ -319,6 +337,7 @@ model ParentContact {
 
   // Father's details
   fatherFirstName    String? @map("father_first_name") @db.VarChar(100)
+  fatherMiddleName   String? @map("father_middle_name") @db.VarChar(100)
   fatherLastName     String? @map("father_last_name") @db.VarChar(100)
   fatherMobile       String? @map("father_mobile") @db.VarChar(15)
   fatherEmail        String? @map("father_email") @db.VarChar(255)
@@ -328,6 +347,7 @@ model ParentContact {
 
   // Mother's details
   motherFirstName    String? @map("mother_first_name") @db.VarChar(100)
+  motherMiddleName   String? @map("mother_middle_name") @db.VarChar(100)
   motherLastName     String? @map("mother_last_name") @db.VarChar(100)
   motherMobile       String? @map("mother_mobile") @db.VarChar(15)
   motherEmail        String? @map("mother_email") @db.VarChar(255)
@@ -335,16 +355,17 @@ model ParentContact {
   motherWorkplace    String? @map("mother_workplace") @db.VarChar(300)
   motherAnnualIncome Int?    @map("mother_annual_income")
 
-  // Optional guardian
+  // Optional guardian (e.g., grandparent, uncle, foster parent)
   guardianFirstName    String? @map("guardian_first_name") @db.VarChar(100)
+  guardianMiddleName   String? @map("guardian_middle_name") @db.VarChar(100)
   guardianLastName     String? @map("guardian_last_name") @db.VarChar(100)
-  guardianRelationship String? @map("guardian_relationship") @db.VarChar(50)
+  guardianRelationship String? @map("guardian_relationship") @db.VarChar(50) // free text: "Grandfather", "Uncle"
   guardianMobile       String? @map("guardian_mobile") @db.VarChar(15)
   guardianEmail        String? @map("guardian_email") @db.VarChar(255)
   guardianOccupation   String? @map("guardian_occupation") @db.VarChar(200)
 
-  // Primary contact selector
-  primaryContact String @map("primary_contact")
+  // Primary contact selector — one of these MUST be true at any time
+  primaryContact String @map("primary_contact") // "father" | "mother" | "guardian"
 
   // Pickup permissions
   fatherCanPickUp   Boolean @default(true) @map("father_can_pick_up")
@@ -360,6 +381,7 @@ model ParentContact {
   // Communication preferences
   preferredLanguage String @default("en") @map("preferred_language") @db.VarChar(10)
 
+  // For mobile login (Phase 1.5) — populated when parent gets onboarded
   fatherMobileVerifiedAt   DateTime? @map("father_mobile_verified_at")
   motherMobileVerifiedAt   DateTime? @map("mother_mobile_verified_at")
   guardianMobileVerifiedAt DateTime? @map("guardian_mobile_verified_at")
@@ -386,8 +408,9 @@ model Student {
   schoolId            String                 @map("school_id") @db.Uuid
   familyGroupId       String?                @map("family_group_id") @db.Uuid
   // Identifiers
-  admissionNumber     String?                @map("admission_number") @db.VarChar(30)
-  apaarId             String?                @map("apaar_id") @db.VarChar(20)
+  grNumber            String?                @map("gr_number") @db.VarChar(30)
+  udiseStudentId      String?                @unique @map("udise_student_id") @db.VarChar(20)
+  apaarId             String?                @map("apaar_id") @db.VarChar(20) // 12-digit ABC ID
   penNumber           String?                @map("pen_number") @db.VarChar(20)
   aadhaarNumber       String?                @map("aadhaar_number") @db.VarChar(12)
   // Personal
@@ -395,22 +418,31 @@ model Student {
   middleName          String?                @map("middle_name") @db.VarChar(100)
   lastName            String                 @map("last_name") @db.VarChar(100)
   dateOfBirth         DateTime               @map("date_of_birth") @db.Date
-  gender              String
-  bloodGroup          String?                @map("blood_group") @db.VarChar(5)
+  gender              String // "male" | "female" | "other"
+  bloodGroup          String?                @map("blood_group") @db.VarChar(5) // "A+", "O-", etc.
   nationality         String                 @default("Indian")
   religion            String?                @db.VarChar(50)
-  category            String?                @db.VarChar(200)
+  category            String?                @db.VarChar(200) // custom category support
   motherTongue        String?                @map("mother_tongue") @db.VarChar(50)
   caste               String?                @db.VarChar(100)
   dateOfBirthInWords  String?                @map("date_of_birth_in_words") @db.VarChar(300)
+
+  // Birth Details
+  birthCity     String?   @map("birth_city") @db.VarChar(100)
+  birthTehsil   String?   @map("birth_tehsil") @db.VarChar(100)
+  birthDistrict String?   @map("birth_district") @db.VarChar(100)
+  birthState    String?   @map("birth_state") @db.VarChar(100)
+  birthCountry  String?   @default("India") @map("birth_country") @db.VarChar(100)
+
   // Contact
   addressLine         String?                @map("address_line") @db.VarChar(500)
   city                String?                @db.VarChar(100)
   state               String?                @db.VarChar(100)
   pincode             String?                @db.VarChar(10)
+  // Photos and docs (blob paths)
   photoBlobPath       String?                @map("photo_blob_path") @db.VarChar(500)
   // Status
-  status              String                 @default("active")
+  status              String                 @default("active") // active | withdrawn | transferred | graduated | deceased
   admittedOn          DateTime               @map("admitted_on") @db.Date
   withdrawnOn         DateTime?              @map("withdrawn_on") @db.Date
   withdrawalReason    String?                @map("withdrawal_reason") @db.Text
@@ -432,15 +464,18 @@ model Student {
   medicalInfo         StudentMedicalInfo?
   feeAccounts         StudentFeeAccount[]
   chatThreads         ChatThread[]
+  certificates        Certificate[]
 
-  @@unique([schoolId, admissionNumber])
+  @@unique([schoolId, grNumber])
   @@index([schoolId, status])
   @@index([schoolId, lastName, firstName])
   @@index([updatedByStaffId])
+  @@index([udiseStudentId])
   @@map("students")
 }
 
 model StudentParentContact {
+  // Junction — a student has one ParentContact (ideally), a ParentContact can serve multiple siblings
   id              String        @id @default(uuid()) @db.Uuid
   studentId       String        @map("student_id") @db.Uuid
   parentContactId String        @map("parent_contact_id") @db.Uuid
@@ -460,9 +495,9 @@ model Enrollment {
   academicYearId   String              @map("academic_year_id") @db.Uuid
   classId          String              @map("class_id") @db.Uuid
   sectionId        String              @map("section_id") @db.Uuid
-  rollNumber       Int?                @map("roll_number")
+  rollNumber       Int?                @map("roll_number") // optional, can be auto-assigned
   enrollmentDate   DateTime            @map("enrollment_date") @db.Date
-  status           String              @default("enrolled")
+  status           String              @default("enrolled") // enrolled | promoted | withdrawn | transferred | repeated
   endedOn          DateTime?           @map("ended_on") @db.Date
   endReason        String?             @map("end_reason") @db.Text
   createdAt        DateTime            @default(now()) @map("created_at")
@@ -495,7 +530,7 @@ model Enrollment {
 model StudentMedicalInfo {
   id                       String   @id @default(uuid()) @db.Uuid
   studentId                String   @unique @map("student_id") @db.Uuid
-  bloodGroup               String?  @map("blood_group") @db.VarChar(5)
+  bloodGroup               String?  @map("blood_group") @db.VarChar(5) // duplicated from Student for atomic medical lookups
   allergies                String?  @db.Text
   chronicConditions        String?  @map("chronic_conditions") @db.Text
   ongoingMedications       String?  @map("ongoing_medications") @db.Text
@@ -524,29 +559,35 @@ model Staff {
   mobilePrimary   String? @map("mobile_primary") @db.VarChar(15)
   mobileSecondary String? @map("mobile_secondary") @db.VarChar(15)
 
-  gender        String?
+  gender        String? // "male" | "female" | "other" | "prefer_not_to_say"
   dateOfBirth   DateTime? @map("date_of_birth") @db.Date
   dateOfJoining DateTime? @map("date_of_joining") @db.Date
 
+  // NEW - Photo
   profilePhotoBlobPath String? @map("profile_photo_blob_path") @db.VarChar(500)
 
+  // NEW - Address
   addressLine1 String? @map("address_line_1") @db.Text
   addressLine2 String? @map("address_line_2") @db.Text
   city         String? @db.VarChar(100)
   state        String? @db.VarChar(100)
   pincode      String? @db.VarChar(10)
 
+  // NEW - Emergency contact
   emergencyContactName     String? @map("emergency_contact_name") @db.VarChar(200)
   emergencyContactMobile   String? @map("emergency_contact_mobile") @db.VarChar(15)
   emergencyContactRelation String? @map("emergency_contact_relation") @db.VarChar(50)
 
-  employmentType String @default("full_time") @map("employment_type")
+  // NEW - Employment
+  employmentType String @default("full_time") @map("employment_type") // full_time | part_time | contractual
 
+  // NEW - Identity verification (DPDP-compliant)
   panNumber    String? @map("pan_number") @db.VarChar(10)
   aadhaarNumber String? @map("aadhaar_number") @db.VarChar(12)
 
   qualification        String?                       @db.VarChar(300)
   preferredLanguage    String                        @default("en") @map("preferred_language") @db.VarChar(10)
+  // existing:
   status               String                        @default("active")
   mustChangePassword   Boolean                       @default(false) @map("must_change_password")
   failedLoginAttempts  Int                           @default(0) @map("failed_login_attempts")
@@ -577,7 +618,7 @@ model StaffSchoolRole {
   id               String    @id @default(uuid()) @db.Uuid
   staffId          String    @map("staff_id") @db.Uuid
   schoolId         String    @map("school_id") @db.Uuid
-  role             String
+  role             String // school_admin / class_teacher / subject_teacher / accountant / admission_counsellor
   isPrimarySchool  Boolean   @default(true) @map("is_primary_school")
   effectiveFrom    DateTime  @map("effective_from") @db.Date
   effectiveTo      DateTime? @map("effective_to") @db.Date
@@ -610,7 +651,7 @@ model StaffSubjectAssignment {
 model AuthSession {
   id               String    @id @default(uuid()) @db.Uuid
   staffId          String    @map("staff_id") @db.Uuid
-  refreshTokenHash String    @unique @map("refresh_token_hash")
+  refreshTokenHash String    @unique @map("refresh_token_hash") // SHA-256 of opaque token
   userAgent        String?   @map("user_agent") @db.Text
   ipAddress        String?   @map("ip_address") @db.VarChar(45)
   expiresAt        DateTime  @map("expires_at")
@@ -626,11 +667,11 @@ model AuthSession {
 model AcademicYear {
   id               String              @id @default(uuid()) @db.Uuid
   schoolId         String              @map("school_id") @db.Uuid
-  name             String              @db.VarChar(20)
+  name             String              @db.VarChar(20) // "2026-27"
   startDate        DateTime            @map("start_date") @db.Date
   endDate          DateTime            @map("end_date") @db.Date
   isCurrent        Boolean             @default(false) @map("is_current")
-  status           String              @default("planning")
+  status           String              @default("planning") // planning | active | archived
   createdAt        DateTime            @default(now()) @map("created_at")
   updatedAt        DateTime            @updatedAt @map("updated_at")
   updatedByStaffId String?             @map("updated_by_staff_id") @db.Uuid
@@ -648,10 +689,10 @@ model AcademicYear {
 model Class {
   id               String       @id @default(uuid()) @db.Uuid
   schoolId         String       @map("school_id") @db.Uuid
-  name             String       @db.VarChar(50)
-  shortName        String?      @map("short_name") @db.VarChar(10)
-  sortOrder        Int          @map("sort_order")
-  status           String       @default("active")
+  name             String       @db.VarChar(50) // "Nursery", "LKG", "Grade 1"
+  shortName        String?      @map("short_name") @db.VarChar(10) // "N", "LKG", "1"
+  sortOrder        Int          @map("sort_order") // for display ordering
+  status           String       @default("active") // active | inactive
   createdAt        DateTime     @default(now()) @map("created_at")
   updatedAt        DateTime     @updatedAt @map("updated_at")
   updatedByStaffId String?      @map("updated_by_staff_id") @db.Uuid
@@ -672,10 +713,10 @@ model Section {
   schoolId            String              @map("school_id") @db.Uuid
   academicYearId      String              @map("academic_year_id") @db.Uuid
   classId             String              @map("class_id") @db.Uuid
-  name                String              @db.VarChar(20)
+  name                String              @db.VarChar(20) // "A", "B", "Blue", "Sapphire"
   classTeacherStaffId String?             @map("class_teacher_staff_id") @db.Uuid
-  capacity            Int?
-  status              String              @default("active")
+  capacity            Int? // optional max students
+  status              String              @default("active") // active | inactive
   createdAt           DateTime            @default(now()) @map("created_at")
   updatedAt           DateTime            @updatedAt @map("updated_at")
   updatedByStaffId    String?             @map("updated_by_staff_id") @db.Uuid
@@ -700,7 +741,7 @@ model FeeCategory {
   shortCode        String                 @map("short_code") @db.VarChar(20)
   description      String?                @db.Text
   isGstApplicable  Boolean                @default(false) @map("is_gst_applicable")
-  gstRate          Int                    @default(0) @map("gst_rate")
+  gstRate          Int                    @default(0) @map("gst_rate") // 0, 5, 12, 18, 28
   hsnCode          String?                @map("hsn_code") @db.VarChar(10)
   isRefundable     Boolean                @default(false) @map("is_refundable")
   sortOrder        Int                    @default(100) @map("sort_order")
@@ -722,7 +763,7 @@ model FeeStructure {
   academicYearId     String                 @map("academic_year_id") @db.Uuid
   classId            String                 @map("class_id") @db.Uuid
   name               String                 @db.VarChar(200)
-  status             String                 @default("draft")
+  status             String                 @default("draft") // draft | published | archived
   publishedAt        DateTime?              @map("published_at")
   publishedByStaffId String?                @map("published_by_staff_id") @db.Uuid
   createdByStaffId   String                 @map("created_by_staff_id") @db.Uuid
@@ -744,9 +785,9 @@ model FeeStructureLineItem {
   id              String       @id @default(uuid()) @db.Uuid
   feeStructureId  String       @map("fee_structure_id") @db.Uuid
   feeCategoryId   String       @map("fee_category_id") @db.Uuid
-  baseAmount      Int          @map("base_amount")
-  isGstApplicable Boolean      @map("is_gst_applicable")
-  gstRate         Int          @map("gst_rate")
+  baseAmount      Int          @map("base_amount") // in paise
+  isGstApplicable Boolean      @map("is_gst_applicable") // snapshot from category
+  gstRate         Int          @map("gst_rate") // snapshot from category
   notes           String?      @db.Text
   feeStructure    FeeStructure @relation(fields: [feeStructureId], references: [id], onDelete: Cascade)
   feeCategory     FeeCategory  @relation(fields: [feeCategoryId], references: [id])
@@ -760,8 +801,9 @@ model FeePlan {
   feeStructureId         String               @map("fee_structure_id") @db.Uuid
   name                   String               @db.VarChar(150)
   installmentType        String               @map("installment_type")
+  // "quarterly" | "annual" | "custom"
   totalInstallments      Int                  @map("total_installments")
-  upfrontDiscountPercent Int                  @default(0) @map("upfront_discount_percent")
+  upfrontDiscountPercent Int                  @default(0) @map("upfront_discount_percent") // 0-20
   isDefault              Boolean              @default(false) @map("is_default")
   status                 String               @default("active")
   createdAt              DateTime             @default(now()) @map("created_at")
@@ -777,11 +819,11 @@ model FeePlanInstallment {
   id                  String                  @id @default(uuid()) @db.Uuid
   feePlanId           String                  @map("fee_plan_id") @db.Uuid
   installmentNumber   Int                     @map("installment_number")
-  name                String                  @db.VarChar(100)
+  name                String                  @db.VarChar(100) // "Q1 - April", "Annual"
   dueDate             DateTime                @map("due_date") @db.Date
-  percentageOfTotal   Int                     @map("percentage_of_total")
+  percentageOfTotal   Int                     @map("percentage_of_total") // must sum to 100 across all installments
   graceDays           Int                     @default(7) @map("grace_days")
-  suggestedLateFee    Int                     @default(0) @map("suggested_late_fee")
+  suggestedLateFee    Int                     @default(0) @map("suggested_late_fee") // in paise
   feePlan             FeePlan                 @relation(fields: [feePlanId], references: [id], onDelete: Cascade)
   studentInstallments StudentFeeInstallment[]
 
@@ -797,13 +839,14 @@ model StudentFeeAccount {
   academicYearId        String                  @map("academic_year_id") @db.Uuid
   feeStructureId        String                  @map("fee_structure_id") @db.Uuid
   feePlanId             String                  @map("fee_plan_id") @db.Uuid
+  // Totals (all in paise, recomputed on every change)
   baseTotalAmount       Int                     @map("base_total_amount")
   concessionTotalAmount Int                     @default(0) @map("concession_total_amount")
   lateFeeTotalAmount    Int                     @default(0) @map("late_fee_total_amount")
   netPayableAmount      Int                     @map("net_payable_amount")
   totalPaidAmount       Int                     @default(0) @map("total_paid_amount")
-  outstandingAmount     Int                     @map("outstanding_amount")
-  status                String                  @default("active")
+  outstandingAmount     Int                     @map("outstanding_amount") // netPayable - totalPaid
+  status                String                  @default("active") // active | settled | written_off
   notes                 String?                 @db.Text
   createdAt             DateTime                @default(now()) @map("created_at")
   updatedAt             DateTime                @updatedAt @map("updated_at")
@@ -831,14 +874,17 @@ model StudentFeeInstallment {
   installmentNumber    Int                    @map("installment_number")
   name                 String                 @db.VarChar(100)
   dueDate              DateTime               @map("due_date") @db.Date
+  // Amounts (all paise)
   baseAmount           Int                    @map("base_amount")
   concessionAmount     Int                    @default(0) @map("concession_amount")
   lateFeeAmount        Int                    @default(0) @map("late_fee_amount")
-  netAmount            Int                    @map("net_amount")
+  netAmount            Int                    @map("net_amount") // base - concession + lateFee
   paidAmount           Int                    @default(0) @map("paid_amount")
-  outstandingAmount    Int                    @map("outstanding_amount")
+  outstandingAmount    Int                    @map("outstanding_amount") // net - paid
+  // Per-category breakdown: [{ categoryId, categoryName, baseAmount, concessionAmount, netAmount }]
   lineItemBreakdown    Json                   @map("line_item_breakdown") @db.JsonB
   status               String                 @default("pending")
+  // pending | partially_paid | paid | overdue
   paidAt               DateTime?              @map("paid_at")
   account              StudentFeeAccount      @relation(fields: [studentFeeAccountId], references: [id], onDelete: Cascade)
   planInstallment      FeePlanInstallment     @relation(fields: [feePlanInstallmentId], references: [id])
@@ -852,18 +898,18 @@ model StudentFeeInstallment {
 model StudentFeeConcession {
   id                  String            @id @default(uuid()) @db.Uuid
   studentFeeAccountId String            @map("student_fee_account_id") @db.Uuid
-  type                String
-  discountMode        String
-  discountPercent     Int?              @map("discount_percent")
-  discountAmount      Int?              @map("discount_amount")
-  appliesTo           String            @map("applies_to")
-  categoryIds         Json?             @map("category_ids") @db.JsonB
+  type                String // sibling | staff | scholarship | merit | financial_aid | other
+  discountMode        String            @map("discount_mode") // percentage | fixed_amount
+  discountPercent     Int?              @map("discount_percent") // 1-100, used when mode=percentage
+  discountAmount      Int?              @map("discount_amount") // paise, used when mode=fixed_amount
+  appliesTo           String            @map("applies_to") // whole_structure | specific_categories
+  categoryIds         Json?             @map("category_ids") @db.JsonB // array of category UUIDs
   reason              String            @db.Text
   validFrom           DateTime          @map("valid_from") @db.Date
   validTo             DateTime?         @map("valid_to") @db.Date
   approvedByStaffId   String            @map("approved_by_staff_id") @db.Uuid
   approvedAt          DateTime          @default(now()) @map("approved_at")
-  status              String            @default("active")
+  status              String            @default("active") // active | revoked
   revokedAt           DateTime?         @map("revoked_at")
   revokedByStaffId    String?           @map("revoked_by_staff_id") @db.Uuid
   revokeReason        String?           @map("revoke_reason") @db.Text
@@ -877,11 +923,11 @@ model StudentLateFee {
   id                  String            @id @default(uuid()) @db.Uuid
   studentFeeAccountId String            @map("student_fee_account_id") @db.Uuid
   linkedInstallmentId String?           @map("linked_installment_id") @db.Uuid
-  amount              Int
+  amount              Int // paise
   reason              String            @db.Text
   appliedDate         DateTime          @map("applied_date") @db.Date
   appliedByStaffId    String            @map("applied_by_staff_id") @db.Uuid
-  status              String            @default("active")
+  status              String            @default("active") // active | waived
   waivedAt            DateTime?         @map("waived_at")
   waivedByStaffId     String?           @map("waived_by_staff_id") @db.Uuid
   waiveReason         String?           @map("waive_reason") @db.Text
@@ -897,8 +943,9 @@ model StaffAttendanceRecord {
   schoolId         String   @map("school_id") @db.Uuid
   staffId          String   @map("staff_id") @db.Uuid
   date             DateTime @db.Date
-  status           String
+  status           String // present | absent | half_day | leave | school_holiday
   reason           String?  @db.Text
+  // Audit
   markedByStaffId  String   @map("marked_by_staff_id") @db.Uuid
   markedAt         DateTime @default(now()) @map("marked_at")
   updatedByStaffId String?  @map("updated_by_staff_id") @db.Uuid
@@ -918,20 +965,29 @@ model FeePayment {
   schoolId              String   @map("school_id") @db.Uuid
   studentFeeAccountId   String   @map("student_fee_account_id") @db.Uuid
   paymentNumber         String   @map("payment_number") @db.VarChar(30)
+                        // Format: P/2627/0001
   paymentDate           DateTime @map("payment_date") @db.Date
-  amount                Int
+  amount                Int      // paise — total amount of this payment
   paymentMode           String   @map("payment_mode")
+                        // "cash" | "cheque" | "dd" | "upi_manual"
+  // Cheque / DD fields
   chequeNumber          String?  @map("cheque_number") @db.VarChar(50)
   chequeDate            DateTime? @map("cheque_date") @db.Date
   bankName              String?  @map("bank_name") @db.VarChar(200)
   ddNumber              String?  @map("dd_number") @db.VarChar(50)
+  // UPI
   upiTransactionId      String?  @map("upi_transaction_id") @db.VarChar(100)
+  // Cheque/DD lifecycle
   chequeStatus          String?  @map("cheque_status")
+                        // null (for cash/upi) | "pending" | "cleared" | "bounced"
   chequeStatusUpdatedAt DateTime? @map("cheque_status_updated_at")
+  // Receipt
   receiptId             String?  @unique @map("receipt_id") @db.Uuid
+  // Audit
   collectedByStaffId    String   @map("collected_by_staff_id") @db.Uuid
   notes                 String?  @db.Text
   status                String   @default("recorded")
+                        // "recorded" | "cancelled"
   cancelledAt           DateTime? @map("cancelled_at")
   cancelledByStaffId    String?  @map("cancelled_by_staff_id") @db.Uuid
   cancelReason          String?  @map("cancel_reason") @db.Text
@@ -942,7 +998,6 @@ model FeePayment {
   account               StudentFeeAccount @relation(fields: [studentFeeAccountId], references: [id])
   allocations           FeePaymentAllocation[]
   receipt               FeeReceipt?       @relation(fields: [receiptId], references: [id])
-
   @@unique([schoolId, paymentNumber])
   @@index([schoolId, paymentDate])
   @@index([studentFeeAccountId])
@@ -953,10 +1008,9 @@ model FeePaymentAllocation {
   id                        String   @id @default(uuid()) @db.Uuid
   feePaymentId              String   @map("fee_payment_id") @db.Uuid
   studentFeeInstallmentId   String   @map("student_fee_installment_id") @db.Uuid
-  amountAllocated           Int      @map("amount_allocated")
+  amountAllocated           Int      @map("amount_allocated")  // paise
   payment                   FeePayment            @relation(fields: [feePaymentId], references: [id], onDelete: Cascade)
   installment               StudentFeeInstallment @relation(fields: [studentFeeInstallmentId], references: [id])
-
   @@map("fee_payment_allocations")
 }
 
@@ -964,22 +1018,27 @@ model FeeReceipt {
   id                    String   @id @default(uuid()) @db.Uuid
   schoolId              String   @map("school_id") @db.Uuid
   receiptNumber         String   @map("receipt_number") @db.VarChar(30)
+                        // Format: R/2627/0001
   fiscalYear            String   @map("fiscal_year") @db.VarChar(6)
+                        // "2627" for Apr 2026 – Mar 2027
   studentFeeAccountId   String   @map("student_fee_account_id") @db.Uuid
   studentId             String   @map("student_id") @db.Uuid
+  // Issue context
   issuedAt              DateTime @map("issued_at")
   issuedByStaffId       String   @map("issued_by_staff_id") @db.Uuid
+  // Immutable snapshot (full receipt data at time of issue)
   snapshot              Json     @db.JsonB
+  // PDF
   pdfBlobPath           String?  @map("pdf_blob_path") @db.VarChar(500)
   pdfGeneratedAt        DateTime? @map("pdf_generated_at")
-  status                String   @default("active")
+  // Cancellation
+  status                String   @default("active")  // "active" | "cancelled"
   cancelledAt           DateTime? @map("cancelled_at")
   cancelledByStaffId    String?  @map("cancelled_by_staff_id") @db.Uuid
   cancelReason          String?  @map("cancel_reason") @db.Text
   supersededByReceiptId String?  @map("superseded_by_receipt_id") @db.Uuid
   payment               FeePayment?
   school                School   @relation(fields: [schoolId], references: [id])
-
   @@unique([schoolId, receiptNumber])
   @@index([schoolId, fiscalYear])
   @@index([studentId])
@@ -989,22 +1048,32 @@ model FeeReceipt {
 model Broadcast {
   id                 String               @id @default(uuid()) @db.Uuid
   schoolId           String               @map("school_id") @db.Uuid
+  // Composition
   title              String               @db.VarChar(200)
-  body               String               @db.Text
-  externalUrl        String?              @map("external_url") @db.VarChar(1000)
-  externalUrlLabel   String?              @map("external_url_label") @db.VarChar(100)
-  targetType         String               @map("target_type")
+  body               String               @db.Text // can include URLs (basic markdown URL conversion done client-side)
+  externalUrl        String?              @map("external_url") @db.VarChar(1000) // optional CTA link
+  externalUrlLabel   String?              @map("external_url_label") @db.VarChar(100) // "View Circular"
+  // Audience
+  targetType         String               @map("target_type") // school, class, section, staff_only, custom
   targetClassId      String?              @map("target_class_id") @db.Uuid
   targetClassIds     Json?                @map("target_class_ids") @db.JsonB
   targetSectionId    String?              @map("target_section_id") @db.Uuid
+  // For 'custom' — list of recipient IDs as JSONB
   customRecipientIds Json?                @map("custom_recipient_ids") @db.JsonB
-  scheduledFor       DateTime?            @map("scheduled_for")
+  // Schedule
+  scheduledFor       DateTime?            @map("scheduled_for") // null = send immediately
+  // Status
   status             String               @default("draft")
+  // Channel selection (push_fcm, in_app)
   channels           Json                 @default("[\"push_fcm\", \"in_app\"]") @db.JsonB
+  // Authorship + audit
   composedByStaffId  String               @map("composed_by_staff_id") @db.Uuid
+  // Auto-generated marker (true if produced by an automated rule, not human-composed)
   isAutomated        Boolean              @default(false) @map("is_automated")
   triggeredByRuleId  String?              @map("triggered_by_rule_id") @db.Uuid
-  recipientCount     Int                  @default(0) @map("recipient_count")
+  attachments        Json?                @map("attachments") @db.JsonB
+  // Dispatch tracking
+  recipientCount     Int                  @default(0) @map("recipient_count") // computed at send time
   sentAt             DateTime?            @map("sent_at")
   cancelledAt        DateTime?            @map("cancelled_at")
   cancelledByStaffId String?              @map("cancelled_by_staff_id") @db.Uuid
@@ -1019,19 +1088,24 @@ model Broadcast {
   rule               NotificationRule?    @relation(fields: [triggeredByRuleId], references: [id])
 
   @@index([schoolId, status])
-  @@index([scheduledFor, status])
+  @@index([scheduledFor, status]) // worker queries this
   @@index([schoolId, sentAt])
   @@map("broadcasts")
 }
 
 model BroadcastRecipient {
+  // One row per recipient — for read tracking and per-recipient delivery status
   id                  String         @id @default(uuid()) @db.Uuid
   broadcastId         String         @map("broadcast_id") @db.Uuid
+  // Recipient is either a parent (parent_id) or a staff (staff_id) — exclusive
   parentContactId     String?        @map("parent_contact_id") @db.Uuid
   staffId             String?        @map("staff_id") @db.Uuid
-  pushDeliveryStatus  String?        @map("push_delivery_status")
-  inAppDeliveryStatus String         @default("delivered") @map("in_app_delivery_status")
+  // Per-channel delivery status
+  pushDeliveryStatus  String?        @map("push_delivery_status") // pending | dispatched | failed | not_applicable
+  inAppDeliveryStatus String         @default("delivered") @map("in_app_delivery_status") // always delivered (just a row in inbox)
+  // Read tracking
   readAt              DateTime?      @map("read_at")
+  // Linked student (for parent recipients — which child this concerns)
   linkedStudentId     String?        @map("linked_student_id") @db.Uuid
   createdAt           DateTime       @default(now()) @map("created_at")
   broadcast           Broadcast      @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
@@ -1039,20 +1113,24 @@ model BroadcastRecipient {
   staff               Staff?         @relation(fields: [staffId], references: [id])
 
   @@index([broadcastId])
-  @@index([parentContactId, readAt])
+  @@index([parentContactId, readAt]) // unread inbox count query
   @@index([staffId, readAt])
   @@map("broadcast_recipients")
 }
 
 model ChatThread {
+  // 1:1 thread between a parent and a class teacher, scoped to one student + one academic year
   id                  String        @id @default(uuid()) @db.Uuid
   schoolId            String        @map("school_id") @db.Uuid
   academicYearId      String        @map("academic_year_id") @db.Uuid
   studentId           String        @map("student_id") @db.Uuid
   parentContactId     String        @map("parent_contact_id") @db.Uuid
   classTeacherStaffId String        @map("class_teacher_staff_id") @db.Uuid
+  // Section context — denormalized for fast filtering
   sectionId           String        @map("section_id") @db.Uuid
-  status              String        @default("active")
+  // Thread state
+  status              String        @default("active") // active | archived
+  // Last message marker — for sorting threads
   lastMessageAt       DateTime?     @map("last_message_at")
   lastMessagePreview  String?       @map("last_message_preview") @db.VarChar(200)
   parentUnreadCount   Int           @default(0) @map("parent_unread_count")
@@ -1067,6 +1145,7 @@ model ChatThread {
 
   messages ChatMessage[]
 
+  // Unique constraint: one thread per (student, parent, classTeacher, year)
   @@unique([studentId, parentContactId, classTeacherStaffId, academicYearId])
   @@index([schoolId, lastMessageAt])
   @@index([parentContactId, status])
@@ -1077,15 +1156,19 @@ model ChatThread {
 model ChatMessage {
   id                    String     @id @default(uuid()) @db.Uuid
   threadId              String     @map("thread_id") @db.Uuid
+  // Sender — exclusive parent or staff
   senderParentContactId String?    @map("sender_parent_contact_id") @db.Uuid
-  senderParentRole      String?    @map("sender_parent_role")
+  senderParentRole      String?    @map("sender_parent_role") // "father" | "mother" | "guardian"
   senderStaffId         String?    @map("sender_staff_id") @db.Uuid
-  body                  String     @db.Text
+  body                  String     @db.Text // text only for Phase 1
+  // Soft-delete only (safeguarding requirement)
   isDeleted             Boolean    @default(false) @map("is_deleted")
   deletedAt             DateTime?  @map("deleted_at")
-  deletedByPartyType    String?    @map("deleted_by_party_type")
+  deletedByPartyType    String?    @map("deleted_by_party_type") // 'parent' | 'staff' | 'admin'
   deletedById           String?    @map("deleted_by_id") @db.Uuid
+  // Edit tracking — Phase 1 doesn't allow editing, but schema reserves
   editedAt              DateTime?  @map("edited_at")
+  // Read tracking — when the OTHER party read this message
   readAt                DateTime?  @map("read_at")
   createdAt             DateTime   @default(now()) @map("created_at")
   thread                ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
@@ -1096,6 +1179,7 @@ model ChatMessage {
 }
 
 model ChatAdminAccessLog {
+  // Every time an admin reads a thread for safeguarding, log it
   id                String   @id @default(uuid()) @db.Uuid
   threadId          String   @map("thread_id") @db.Uuid
   accessedByStaffId String   @map("accessed_by_staff_id") @db.Uuid
@@ -1110,14 +1194,17 @@ model ChatAdminAccessLog {
 model NotificationRule {
   id                          String      @id @default(uuid()) @db.Uuid
   schoolId                    String      @map("school_id") @db.Uuid
-  trigger                     String
+  trigger                     String // see NOTIFICATION_RULE_TRIGGERS
   name                        String      @db.VarChar(200)
   description                 String?     @db.Text
   isEnabled                   Boolean     @default(true) @map("is_enabled")
+  // Trigger-specific config as JSONB
   config                      Json        @db.JsonB
-  cronExpression              String?     @map("cron_expression") @db.VarChar(50)
+  // Run schedule for time-based triggers
+  cronExpression              String?     @map("cron_expression") @db.VarChar(50) // e.g., "0 8 * * *" for 8 AM daily
+  // Stats
   lastRunAt                   DateTime?   @map("last_run_at")
-  lastRunStatus               String?     @map("last_run_status")
+  lastRunStatus               String?     @map("last_run_status") // success | partial_failure | failed
   lastRunNotificationsCreated Int?        @map("last_run_notifications_created")
   createdByStaffId            String      @map("created_by_staff_id") @db.Uuid
   createdAt                   DateTime    @default(now()) @map("created_at")
@@ -1126,20 +1213,23 @@ model NotificationRule {
   school                      School      @relation(fields: [schoolId], references: [id])
   triggeredBroadcasts         Broadcast[]
 
-  @@unique([schoolId, trigger])
+  @@unique([schoolId, trigger]) // one rule per trigger per school
   @@map("notification_rules")
 }
 
 model NotificationLog {
+  // Every notification dispatch attempt — for debugging and audit
   id                   String   @id @default(uuid()) @db.Uuid
   schoolId             String   @map("school_id") @db.Uuid
   broadcastRecipientId String?  @map("broadcast_recipient_id") @db.Uuid
-  channel              String
-  recipientType        String   @map("recipient_type")
+  channel              String // push_fcm | in_app
+  recipientType        String   @map("recipient_type") // parent | staff
   recipientId          String   @map("recipient_id") @db.Uuid
-  status               String
+  status               String // dispatched | failed | skipped
+  // For push: device token used (truncated, last 6 chars only — for debugging without exposing token)
   deviceTokenSuffix    String?  @map("device_token_suffix") @db.VarChar(10)
   errorMessage         String?  @map("error_message") @db.Text
+  // For Phase 1, push is stubbed — log the intent
   isStubbed            Boolean  @default(false) @map("is_stubbed")
   createdAt            DateTime @default(now()) @map("created_at")
 
@@ -1155,12 +1245,14 @@ model PromotionRun {
   toAcademicYearId    String   @map("to_academic_year_id") @db.Uuid
   fromClassId         String   @map("from_class_id") @db.Uuid
   className           String   @map("class_name") @db.VarChar(100)
+  // Summary counts
   totalStudents       Int      @map("total_students")
   promoted            Int      @default(0)
   retained            Int      @default(0)
   graduated           Int      @default(0)
   transferredOut      Int      @map("transferred_out") @default(0)
   droppedOut          Int      @map("dropped_out") @default(0)
+  // Who ran it
   executedByStaffId   String   @map("executed_by_staff_id") @db.Uuid
   executedAt          DateTime @default(now()) @map("executed_at")
   notes               String?  @db.Text
@@ -1168,7 +1260,7 @@ model PromotionRun {
   rolledBackGradeIds  String[] @map("rolled_back_grade_ids") @db.Uuid
   rolledBackStudentIds String[] @map("rolled_back_student_ids") @db.Uuid
   school              School   @relation(fields: [schoolId], references: [id])
-
+  
   @@index([schoolId, fromAcademicYearId])
   @@map("promotion_runs")
 }
@@ -1178,7 +1270,7 @@ model SupportAccessGrant {
   schoolId        String        @map("school_id") @db.Uuid
   platformOwnerId String        @map("platform_owner_id") @db.Uuid
   reason          String        @db.VarChar(500)
-  duration        Int
+  duration        Int           // in hours
   requestedAt     DateTime      @default(now()) @map("requested_at")
   expiresAt       DateTime      @map("expires_at")
   revokedAt       DateTime?     @map("revoked_at")
@@ -1186,7 +1278,7 @@ model SupportAccessGrant {
 
   school        School        @relation(fields: [schoolId], references: [id])
   platformOwner PlatformOwner @relation(fields: [platformOwnerId], references: [id])
-
+  
   @@map("support_access_grants")
 }
 
@@ -1248,3 +1340,45 @@ model SchoolModuleEntitlement {
   @@map("school_module_entitlements")
 }
 
+model Certificate {
+  id                 String    @id @default(uuid()) @db.Uuid
+  schoolId           String    @map("school_id") @db.Uuid
+  studentId          String    @map("student_id") @db.Uuid
+  certificateType    String    @map("certificate_type") @db.VarChar(50) // 'tc' | 'bonafide' | 'custom'
+  customTypeName     String?   @map("custom_type_name") @db.VarChar(100)
+  certificateNo      String    @map("certificate_no") @db.VarChar(100)
+  status             String    @default("draft") @db.VarChar(20) // 'draft' | 'issued' | 'cancelled'
+  issuedAt           DateTime? @map("issued_at")
+  cancelledAt        DateTime? @map("cancelled_at")
+  cancellationReason String?   @map("cancellation_reason") @db.Text
+  cancelledBy        String?   @map("cancelled_by") @db.Uuid
+  
+  // Snapshot of all data at time of issue (immutable record)
+  dataSnapshot       Json?     @map("data_snapshot") @db.JsonB
+
+  // Manual fields (TC-specific)
+  progress           String?   @db.Text
+  conduct            String?   @db.VarChar(200)
+  dateOfLeaving      DateTime? @map("date_of_leaving")
+  leavingClass       String?   @map("leaving_class") @db.VarChar(100)
+  leavingClassFrom   String?   @map("leaving_class_from") @db.VarChar(100)
+  reasonForLeaving   String?   @map("reason_for_leaving") @db.Text
+  remark             String?   @db.Text
+
+  // Manual fields (Bonafide-specific)
+  purpose            String?   @db.Text
+  
+  // General
+  createdBy          String    @map("created_by") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  pdfPath            String?   @map("pdf_path") @db.VarChar(500)
+
+  school             School    @relation(fields: [schoolId], references: [id])
+  student            Student   @relation(fields: [studentId], references: [id])
+
+  @@index([schoolId])
+  @@index([studentId])
+  @@unique([schoolId, certificateType, certificateNo])
+  @@map("certificates")
+}
