@@ -1,0 +1,16 @@
+# Dependencies
+node_modules
+
+# Environment variables
+.env
+.env.*
+!.env.example
+keys/*.pem
+
+# Production builds
+dist
+*.tsbuildinfo
+
+# Logs
+logs
+*.log
