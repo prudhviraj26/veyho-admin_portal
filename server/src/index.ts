@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import Redis from 'ioredis';
 import prisma from './prisma';
 import { requireAuth, AuthenticatedRequest } from './middleware/auth';
+import platformNotificationsRouter from './routes/notifications';
 
 dotenv.config();
 
@@ -1196,6 +1197,9 @@ app.patch('/v1/platform/schools/:id/modules/:moduleKey', requireAuth, async (req
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Platform-to-School Notifications
+app.use('/v1/platform/notifications', platformNotificationsRouter);
 
 app.listen(PORT, () => {
   console.log(`Veyho Admin backend listening at http://localhost:${PORT}`);

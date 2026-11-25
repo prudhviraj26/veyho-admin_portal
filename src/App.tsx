@@ -6,6 +6,7 @@ import { DashboardLayout } from './pages/dashboard/DashboardLayout';
 import { Overview } from './pages/dashboard/Overview';
 import { SchoolRegistry } from './pages/schools/SchoolRegistry';
 import { SupportGrants } from './pages/support/SupportGrants';
+import { PlatformNotifications } from './pages/notifications/PlatformNotifications';
 
 // Protected Route Guard
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -54,6 +55,14 @@ function App() {
             element={
               <LayoutWrapper>
                 <SchoolRegistry />
+              </LayoutWrapper>
+            }
+          />
+          <Route
+            path="/notifications"
+            element={
+              <LayoutWrapper>
+                <PlatformNotifications />
               </LayoutWrapper>
             }
           />

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   School, Plus, Search, Mail, Phone, Copy, Check, ShieldAlert, Loader2, X,
   Pause, Play, Archive, RefreshCw, Trash2, History, AlertTriangle, ChevronDown,
-  Calendar, User, FileText, Lock, LayoutDashboard, Users, GraduationCap, Settings, ClipboardList, Clock, CreditCard, MessageSquare, BarChart3
+  Calendar, User, FileText, Lock, LayoutDashboard, Users, GraduationCap, Settings, ClipboardList, Clock, CreditCard, MessageSquare, BarChart3, Bell
 } from 'lucide-react';
 import { apiClient } from '../../lib/axios';
 
@@ -69,6 +70,7 @@ interface HistoryLog {
 }
 
 export const SchoolRegistry: React.FC = () => {
+  const navigate = useNavigate();
   const [schools, setSchools] = useState<SchoolData[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -667,6 +669,15 @@ Link: https://schools.veyho.com/login (or local portal)`;
 
                               {activeDropdown === s.id && (
                                 <div className="absolute right-0 mt-1.5 w-44 bg-zinc-950 border border-zinc-800 rounded-lg shadow-2xl z-20 py-1 font-sans text-left">
+                                  <button
+                                    onClick={() => {
+                                      setActiveDropdown(null);
+                                      navigate(`/notifications?schoolId=${s.id}`);
+                                    }}
+                                    className="w-full text-left px-3 py-2 text-xs text-emerald-400 hover:bg-emerald-950/30 flex items-center gap-2 border-b border-zinc-900"
+                                  >
+                                    <Bell className="w-3.5 h-3.5" /> Send Update
+                                  </button>
                                   <button
                                     onClick={() => {
                                       setCapSchool(s);

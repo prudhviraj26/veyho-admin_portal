@@ -108,6 +108,7 @@ model School {
   enrollments            Enrollment[]
   admissions             Admission[]
   holidays               SchoolHoliday[]
+  events                 SchoolEvent[]
   attendanceSessions     AttendanceSession[]
   staffAttendanceRecords StaffAttendanceRecord[]
   feeCategories          FeeCategory[]
@@ -121,6 +122,10 @@ model School {
   promotionRuns          PromotionRun[]
   supportAccessGrants    SupportAccessGrant[]
   certificates           Certificate[]
+  deviceTokens           DeviceToken[]
+  consentLogs            ClickwrapConsentLog[]
+  appFeedbacks           AppFeedback[]
+  platformNotificationTargets PlatformNotificationTarget[]
 
 
   @@map("schools")
@@ -144,6 +149,53 @@ model SchoolHoliday {
   @@unique([schoolId, date])
   @@index([academicYearId, date])
   @@map("school_holidays")
+}
+
+model SchoolEvent {
+  id               String               @id @default(uuid()) @db.Uuid
+  schoolId         String               @map("school_id") @db.Uuid
+  academicYearId   String               @map("academic_year_id") @db.Uuid
+  title            String               @db.VarChar(200)
+  description      String?              @db.Text
+  location         String?              @db.VarChar(200)
+  startDate        DateTime             @map("start_date") @db.Date
+  endDate          DateTime             @map("end_date") @db.Date
+  isAllDay         Boolean              @default(true) @map("is_all_day")
+  startTime        String?              @map("start_time") @db.VarChar(10)
+  endTime          String?              @map("end_time") @db.VarChar(10)
+  category         String               @default("GENERAL") @db.VarChar(50)
+  scope            String               @default("SCHOOL") @db.VarChar(20)
+  attendanceImpact String               @default("REGULAR_ATTENDANCE") @map("attendance_impact") @db.VarChar(30)
+  isPublished      Boolean              @default(true) @map("is_published")
+  createdByStaffId String               @map("created_by_staff_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+  updatedByStaffId String?              @map("updated_by_staff_id") @db.Uuid
+
+  school           School               @relation(fields: [schoolId], references: [id])
+  targets          SchoolEventTarget[]
+  broadcasts       Broadcast[]
+
+  @@index([schoolId, startDate, endDate])
+  @@index([academicYearId, startDate])
+  @@map("school_events")
+}
+
+model SchoolEventTarget {
+  id        String      @id @default(uuid()) @db.Uuid
+  eventId   String      @map("event_id") @db.Uuid
+  classId   String?     @map("class_id") @db.Uuid
+  sectionId String?     @map("section_id") @db.Uuid
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  event     SchoolEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  class     Class?      @relation(fields: [classId], references: [id], onDelete: Cascade)
+  section   Section?    @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@index([classId])
+  @@index([sectionId])
+  @@map("school_event_targets")
 }
 
 model AttendanceSession {
@@ -386,6 +438,13 @@ model ParentContact {
   motherMobileVerifiedAt   DateTime? @map("mother_mobile_verified_at")
   guardianMobileVerifiedAt DateTime? @map("guardian_mobile_verified_at")
 
+  passwordHash           String?   @map("password_hash") @db.VarChar(255)
+  mustChangePassword     Boolean   @default(true) @map("must_change_password")
+  passwordResetAt        DateTime? @map("password_reset_at")
+
+  acceptedTermsVersion   String?   @map("accepted_terms_version") @db.VarChar(20)
+  acceptedPrivacyVersion String?   @map("accepted_privacy_version") @db.VarChar(20)
+
   status           String   @default("active")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
@@ -396,6 +455,9 @@ model ParentContact {
   studentLinks        StudentParentContact[]
   chatThreads         ChatThread[]
   broadcastRecipients BroadcastRecipient[]
+  deviceTokens        DeviceToken[]
+  consentLogs         ClickwrapConsentLog[]
+  sessions            AuthSession[]
 
   @@index([schoolId, fatherMobile])
   @@index([schoolId, motherMobile])
@@ -605,6 +667,8 @@ model Staff {
   reviewedCorrections  AttendanceCorrectionRequest[] @relation("ReviewedCorrections")
   broadcastRecipients  BroadcastRecipient[]
   chatThreads          ChatThread[]
+  deviceTokens         DeviceToken[]
+  platformNotificationReads PlatformNotificationRead[]
 
   subjectsTaught    String?                 @map("subjects_taught") @db.VarChar(500)
   subjectAssignments StaffSubjectAssignment[]
@@ -649,18 +713,21 @@ model StaffSubjectAssignment {
 }
 
 model AuthSession {
-  id               String    @id @default(uuid()) @db.Uuid
-  staffId          String    @map("staff_id") @db.Uuid
-  refreshTokenHash String    @unique @map("refresh_token_hash") // SHA-256 of opaque token
-  userAgent        String?   @map("user_agent") @db.Text
-  ipAddress        String?   @map("ip_address") @db.VarChar(45)
-  expiresAt        DateTime  @map("expires_at")
-  revokedAt        DateTime? @map("revoked_at")
-  lastUsedAt       DateTime  @default(now()) @map("last_used_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  staff            Staff     @relation(fields: [staffId], references: [id])
+  id               String         @id @default(uuid()) @db.Uuid
+  staffId          String?        @map("staff_id") @db.Uuid
+  parentContactId  String?        @map("parent_contact_id") @db.Uuid
+  refreshTokenHash String         @unique @map("refresh_token_hash") // SHA-256 of opaque token
+  userAgent        String?        @map("user_agent") @db.Text
+  ipAddress        String?        @map("ip_address") @db.VarChar(45)
+  expiresAt        DateTime       @map("expires_at")
+  revokedAt        DateTime?      @map("revoked_at")
+  lastUsedAt       DateTime       @default(now()) @map("last_used_at")
+  createdAt        DateTime       @default(now()) @map("created_at")
+  staff            Staff?         @relation(fields: [staffId], references: [id])
+  parentContact    ParentContact? @relation(fields: [parentContactId], references: [id])
 
   @@index([staffId])
+  @@index([parentContactId])
   @@map("auth_sessions")
 }
 
@@ -702,6 +769,7 @@ model Class {
   feeStructures    FeeStructure[]
   requestedAdmissions Admission[] @relation("RequestedClassAdmissions")
   subjectAssignments StaffSubjectAssignment[]
+  eventTargets       SchoolEventTarget[]
 
   @@unique([schoolId, name])
   @@index([schoolId, sortOrder])
@@ -727,6 +795,7 @@ model Section {
   enrollments         Enrollment[]
   attendanceSessions  AttendanceSession[]
   subjectAssignments  StaffSubjectAssignment[]
+  eventTargets        SchoolEventTarget[]
 
   @@unique([academicYearId, classId, name])
   @@index([schoolId, academicYearId])
@@ -1048,6 +1117,7 @@ model FeeReceipt {
 model Broadcast {
   id                 String               @id @default(uuid()) @db.Uuid
   schoolId           String               @map("school_id") @db.Uuid
+  broadcastType      String               @default("school_notice") @map("broadcast_type") @db.VarChar(50)
   // Composition
   title              String               @db.VarChar(200)
   body               String               @db.Text // can include URLs (basic markdown URL conversion done client-side)
@@ -1071,6 +1141,7 @@ model Broadcast {
   // Auto-generated marker (true if produced by an automated rule, not human-composed)
   isAutomated        Boolean              @default(false) @map("is_automated")
   triggeredByRuleId  String?              @map("triggered_by_rule_id") @db.Uuid
+  eventId            String?              @map("event_id") @db.Uuid
   attachments        Json?                @map("attachments") @db.JsonB
   // Dispatch tracking
   recipientCount     Int                  @default(0) @map("recipient_count") // computed at send time
@@ -1084,10 +1155,14 @@ model Broadcast {
   updatedAt          DateTime             @updatedAt @map("updated_at")
   updatedByStaffId   String?              @map("updated_by_staff_id") @db.Uuid
   school             School               @relation(fields: [schoolId], references: [id])
+  event              SchoolEvent?         @relation(fields: [eventId], references: [id], onDelete: SetNull)
   recipients         BroadcastRecipient[]
   rule               NotificationRule?    @relation(fields: [triggeredByRuleId], references: [id])
 
   @@index([schoolId, status])
+  @@index([schoolId, broadcastType, status])
+  @@index([schoolId, eventId, status])
+  @@index([eventId])
   @@index([scheduledFor, status]) // worker queries this
   @@index([schoolId, sentAt])
   @@map("broadcasts")
@@ -1293,6 +1368,7 @@ model PlatformOwner {
   updatedAt           DateTime             @updatedAt @map("updated_at")
   supportAccessGrants   SupportAccessGrant[]
   schoolStatusHistories SchoolStatusHistory[]
+  platformNotifications PlatformNotification[]
 
   @@map("platform_owners")
 }
@@ -1382,3 +1458,176 @@ model Certificate {
   @@unique([schoolId, certificateType, certificateNo])
   @@map("certificates")
 }
+
+model DeviceToken {
+  id                 String    @id @default(uuid()) @db.Uuid
+  schoolId           String    @map("school_id") @db.Uuid
+  staffId            String?   @map("staff_id") @db.Uuid
+  parentContactId    String?   @map("parent_contact_id") @db.Uuid
+  
+  // Hardware & OS Telemetry
+  deviceUuid         String?   @map("device_uuid") @db.VarChar(100) // ANDROID_ID / iOS IDFV
+  deviceToken        String    @unique @map("device_token") @db.VarChar(500) // FCM Push Token
+  platform           String    @db.VarChar(20) // android | ios | web
+  deviceModel        String?   @map("device_model") @db.VarChar(100)
+  deviceManufacturer String?   @map("device_manufacturer") @db.VarChar(100)
+  osVersion          String?   @map("os_version") @db.VarChar(50)
+  appVersion         String?   @map("app_version") @db.VarChar(50)
+  ipAddress          String?   @map("ip_address") @db.VarChar(45)
+  locale             String?   @db.VarChar(20)
+  timezone           String?   @db.VarChar(50)
+  isJailbroken       Boolean   @default(false) @map("is_jailbroken")
+
+  // State & Lifecycle Management
+  isActive           Boolean   @default(true) @map("is_active")
+  isPushEnabled      Boolean   @default(true) @map("is_push_enabled")
+  lastActiveAt       DateTime  @default(now()) @map("last_active_at")
+  deactivatedAt      DateTime? @map("deactivated_at")
+  deactivationReason String?   @map("deactivation_reason") @db.VarChar(100)
+
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  school             School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  staff              Staff?         @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  parentContact      ParentContact? @relation(fields: [parentContactId], references: [id], onDelete: Cascade)
+  consentLogs        ClickwrapConsentLog[]
+
+  @@index([schoolId])
+  @@index([staffId])
+  @@index([parentContactId])
+  @@index([parentContactId, isActive])
+  @@index([deviceUuid])
+  @@map("device_tokens")
+}
+
+model ClickwrapConsentLog {
+  id              String       @id @default(uuid()) @db.Uuid
+  schoolId        String       @map("school_id") @db.Uuid
+  parentContactId String?      @map("parent_contact_id") @db.Uuid
+  staffId         String?      @map("staff_id") @db.Uuid
+  deviceTokenId   String?      @map("device_token_id") @db.Uuid
+  
+  documentType    String       @map("document_type") @db.VarChar(50) // terms_of_service | privacy_policy
+  documentVersion String       @map("document_version") @db.VarChar(20) // e.g. v1.0.0
+  documentSha256  String       @map("document_sha256") @db.VarChar(64) // SHA-256 fingerprint of displayed text
+  
+  ipAddress       String?      @map("ip_address") @db.VarChar(45)
+  deviceUuid      String?      @map("device_uuid") @db.VarChar(100)
+  userAgent       String?      @map("user_agent") @db.VarChar(255)
+  agreedAt        DateTime     @default(now()) @map("agreed_at")
+
+  school          School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  parentContact   ParentContact? @relation(fields: [parentContactId], references: [id], onDelete: Cascade)
+  deviceToken     DeviceToken?   @relation(fields: [deviceTokenId], references: [id], onDelete: SetNull)
+
+  @@index([schoolId])
+  @@index([parentContactId, documentType, documentVersion])
+  @@map("clickwrap_consent_logs")
+}
+
+model LegalDocument {
+  id              String    @id @default(uuid()) @db.Uuid
+  documentType    String    @map("document_type") @db.VarChar(50) // terms_of_service | privacy_policy
+  version         String    @db.VarChar(20) // e.g. v1.0.0
+  isMajor         Boolean   @default(false) @map("is_major") // true = forces re-consent on mobile apps
+  title           String    @db.VarChar(200)
+  contentMarkdown String    @map("content_markdown") @db.Text
+  contentSha256   String    @map("content_sha256") @db.VarChar(64)
+  websiteUrl      String?   @map("website_url") @db.VarChar(500)
+  isActive        Boolean   @default(true) @map("is_active")
+  effectiveDate   DateTime  @default(now()) @map("effective_date")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  @@unique([documentType, version])
+  @@index([documentType, isActive])
+  @@map("legal_documents")
+}
+
+model AppFeedback {
+  id              String    @id @default(uuid()) @db.Uuid
+  schoolId        String?   @map("school_id") @db.Uuid
+  schoolName      String?   @map("school_name") @db.VarChar(300)
+  userId          String    @map("user_id") @db.Uuid
+  userRole        String    @map("user_role") @db.VarChar(20) // 'PARENT' | 'TEACHER'
+  userName        String    @map("user_name") @db.VarChar(200)
+  userContact     String?   @map("user_contact") @db.VarChar(100)
+  category        String    @db.VarChar(50) // 'FEATURE_REQUEST' | 'BUG_REPORT' | 'SUGGESTION' | 'OTHER'
+  rating          Int?      // 1 to 5
+  message         String    @db.Text
+  appVersion      String?   @map("app_version") @db.VarChar(50)
+  platform        String?   @db.VarChar(20) // 'android' | 'ios'
+  deviceModel     String?   @map("device_model") @db.VarChar(100)
+  osVersion       String?   @map("os_version") @db.VarChar(50)
+  status          String    @default("OPEN") @db.VarChar(20) // 'OPEN' | 'IN_REVIEW' | 'RESOLVED' | 'DISMISSED'
+  adminNotes      String?   @map("admin_notes") @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  school          School?   @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+
+  @@index([userRole])
+  @@index([category])
+  @@index([status])
+  @@index([createdAt])
+  @@map("app_feedback")
+}
+
+enum PlatformNotificationPriority {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+model PlatformNotification {
+  id             String                       @id @default(uuid()) @db.Uuid
+  title          String                       @db.VarChar(200)
+  message        String                       @db.Text
+  priority       PlatformNotificationPriority @default(INFO)
+  isPinnedBanner Boolean                      @default(false) @map("is_pinned_banner")
+  actionLabel    String?                      @map("action_label") @db.VarChar(80)
+  actionUrl      String?                      @map("action_url") @db.VarChar(500)
+  expiresAt      DateTime?                    @map("expires_at")
+  createdById    String                       @map("created_by_id") @db.Uuid
+  createdAt      DateTime                     @default(now()) @map("created_at")
+  updatedAt      DateTime                     @updatedAt @map("updated_at")
+
+  createdBy PlatformOwner                @relation(fields: [createdById], references: [id])
+  targets   PlatformNotificationTarget[]
+  reads     PlatformNotificationRead[]
+
+  @@index([createdAt])
+  @@index([expiresAt])
+  @@map("platform_notifications")
+}
+
+model PlatformNotificationTarget {
+  id             String               @id @default(uuid()) @db.Uuid
+  notificationId String               @map("notification_id") @db.Uuid
+  schoolId       String               @map("school_id") @db.Uuid
+
+  notification PlatformNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  school       School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, schoolId])
+  @@index([schoolId])
+  @@map("platform_notification_targets")
+}
+
+model PlatformNotificationRead {
+  id             String               @id @default(uuid()) @db.Uuid
+  notificationId String               @map("notification_id") @db.Uuid
+  staffId        String               @map("staff_id") @db.Uuid
+  readAt         DateTime             @default(now()) @map("read_at")
+  dismissedAt    DateTime?            @map("dismissed_at")
+
+  notification PlatformNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  staff        Staff                @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, staffId])
+  @@index([staffId])
+  @@map("platform_notification_reads")
+}
+
+
+

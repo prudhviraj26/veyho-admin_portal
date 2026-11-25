@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Shield, School, Key, LogOut, Menu, X, Terminal, User as UserIcon } from 'lucide-react';
+import { Shield, School, Key, LogOut, Menu, X, Terminal, User as UserIcon, Bell } from 'lucide-react';
 
 interface SidebarItem {
   name: string;
@@ -26,6 +26,7 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   const menuItems: SidebarItem[] = [
     { name: 'Terminal Dashboard', path: '/', icon: Terminal },
     { name: 'School Registry', path: '/schools', icon: School },
+    { name: 'Notifications', path: '/notifications', icon: Bell },
     { name: 'Support Grants', path: '/support', icon: Key },
   ];
 
