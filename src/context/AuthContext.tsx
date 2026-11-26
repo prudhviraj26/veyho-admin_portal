@@ -28,6 +28,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        const res = await apiClient.get('/auth/me');
+        if (res.data?.user && (res.data.user.role === 'platform_owner' || res.data.user.roles.includes('platform_owner'))) {
+          setUser(res.data.user);
+        } else {
+          setUser(null);
+        }
+      } catch {
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+    void initAuth();
+  }, []);
+
   const checkAuth = async () => {
     try {
       const res = await apiClient.get('/auth/me');
@@ -41,7 +59,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         setUser(null);
       }
-    } catch (e) {
+    } catch {
       setUser(null);
     } finally {
       setLoading(false);
@@ -56,7 +74,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       await apiClient.post('/auth/logout');
-    } catch (e) {
+    } catch {
       // ignore
     } finally {
       localStorage.removeItem('shq_token');
@@ -65,10 +83,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  useEffect(() => {
-    checkAuth();
-  }, []);
-
   return (
     <AuthContext.Provider value={{ user, isAuthenticated: !!user, loading, login, logout, checkAuth }}>
       {children}
@@ -76,6 +90,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {

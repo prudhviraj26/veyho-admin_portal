@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { PlatformNotificationPriority } from '@prisma/client';
+import { PlatformNotificationPriority, Prisma } from '@prisma/client';
 import prisma from '../prisma';
 import { requireAuth, AuthenticatedRequest } from '../middleware/auth';
 
@@ -12,7 +12,19 @@ function isSafeActionUrl(url: string): boolean {
   return url.startsWith('/') || url.startsWith('https://') || url.startsWith('http://');
 }
 
-function serializeNotification(n: any) {
+type NotificationWithRelations = Prisma.PlatformNotificationGetPayload<{
+  include: {
+    createdBy: { select: { id: true; firstName: true; lastName: true; email: true } };
+    targets: {
+      include: {
+        school: { select: { name: true; shortName: true } };
+      };
+    };
+    _count: { select: { reads: true } };
+  };
+}>;
+
+function serializeNotification(n: NotificationWithRelations) {
   return {
     id: n.id,
     title: n.title,
@@ -32,7 +44,7 @@ function serializeNotification(n: any) {
           email: n.createdBy.email,
         }
       : null,
-    targets: (n.targets || []).map((t: any) => ({
+    targets: (n.targets || []).map((t) => ({
       schoolId: t.schoolId,
       schoolName: t.school?.name ?? null,
       shortName: t.school?.shortName ?? null,

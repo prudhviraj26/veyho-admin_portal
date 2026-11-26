@@ -5,15 +5,40 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import Redis from 'ioredis';
+import { Prisma } from '@prisma/client';
 import prisma from './prisma';
-import { requireAuth, AuthenticatedRequest } from './middleware/auth';
+import { requireAuth, AuthenticatedRequest, getJwtKeys } from './middleware/auth';
 import platformNotificationsRouter from './routes/notifications';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'veyho_admin_portal_local_secret_key_1293847';
+const { privateKey: JWT_PRIVATE_KEY } = getJwtKeys();
+
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_MAX_ATTEMPTS = 10;
+const loginAttemptsByIp = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimitLogin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = loginAttemptsByIp.get(ip);
+
+  if (!entry || entry.resetAt <= now) {
+    loginAttemptsByIp.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return next();
+  }
+
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) {
+    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
+  }
+
+  entry.count += 1;
+  return next();
+}
 
 const redisUrl = process.env.REDIS_URL;
 const redis = redisUrl ? new Redis(redisUrl) : null;
@@ -22,6 +47,14 @@ if (redis) {
 } else {
   console.log('[Redis] REDIS_URL not configured. Cache invalidation is disabled.');
 }
+
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
 
 app.use(cors({
   origin: true,
@@ -38,7 +71,7 @@ app.use((req, res, next) => {
 });
 
 // Auth Routes
-app.post('/v1/auth/login', async (req, res) => {
+app.post('/v1/auth/login', rateLimitLogin, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -60,13 +93,20 @@ app.post('/v1/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Generate JWT
+    // Generate RS256 JWT (compatible with both admin portal and school_web_app)
     const tokenPayload = {
       id: platformOwner.id,
+      sub: platformOwner.id,
       email: platformOwner.email,
       isPlatformOwner: true,
+      roles: ['platform_owner'],
+      role: 'platform_owner',
+      type: 'access',
     };
-    const accessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '24h' });
+    const accessToken = jwt.sign(tokenPayload, JWT_PRIVATE_KEY, {
+      algorithm: 'RS256',
+      expiresIn: '24h',
+    });
 
     console.log(`[AUTH] Successful login for platform owner: ${platformOwner.email}`);
 
@@ -81,7 +121,7 @@ app.post('/v1/auth/login', async (req, res) => {
         roles: ['platform_owner'],
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Login error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -108,7 +148,7 @@ app.get('/v1/auth/me', requireAuth, async (req: AuthenticatedRequest, res: Respo
         roles: ['platform_owner'],
       }
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Auth check error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -176,7 +216,7 @@ app.get('/v1/platform/schools', requireAuth, async (req, res) => {
     });
 
     return res.json(result);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching schools:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -206,66 +246,66 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
       });
     }
 
-    // Create Group
-    const group = await prisma.group.create({
-      data: {
-        name: `${dto.name} Group`,
-      },
-    });
-
     const parsedMaxStudents = dto.maxStudents !== undefined && dto.maxStudents !== null && dto.maxStudents !== ''
       ? parseInt(String(dto.maxStudents), 10)
       : null;
 
-    // Create School
-    const school = await prisma.school.create({
-      data: {
-        groupId: group.id,
-        name: dto.name,
-        phonePrimary: dto.phonePrimary || null,
-        emailPrimary: dto.emailPrimary || null,
-        maxStudents: isNaN(parsedMaxStudents as number) ? null : parsedMaxStudents,
-      },
-    });
-
-    // Create Module Entitlements
-    await prisma.schoolModuleEntitlement.createMany({
-      data: ['admissions', 'attendance', 'fees', 'communication', 'reports', 'certificates'].map(moduleKey => ({
-        schoolId: school.id,
-        moduleKey,
-        isEnabled: true,
-      })),
-    });
-
-    // Generate Temporary Password
+    // Generate Temporary Password before transaction so hashing does not hold DB locks
     const tempPassword = `Veyho@${Math.floor(100000 + Math.random() * 900000)}`;
     const passwordHash = await bcrypt.hash(tempPassword, 12);
+    const normalizedAdminEmail = dto.adminEmail.toLowerCase();
 
-    // Create Admin Staff
-    const staff = await prisma.staff.create({
-      data: {
-        groupId: group.id,
-        firstName: dto.adminFirstName,
-        lastName: dto.adminLastName,
-        email: dto.adminEmail.toLowerCase(),
-        mobilePrimary: dto.adminMobile,
-        passwordHash,
-        mustChangePassword: true,
-        status: 'active',
-      },
+    const { school, staff } = await prisma.$transaction(async (tx) => {
+      const group = await tx.group.create({
+        data: {
+          name: `${dto.name} Group`,
+        },
+      });
+
+      const createdSchool = await tx.school.create({
+        data: {
+          groupId: group.id,
+          name: dto.name,
+          phonePrimary: dto.phonePrimary || null,
+          emailPrimary: dto.emailPrimary || null,
+          maxStudents: isNaN(parsedMaxStudents as number) ? null : parsedMaxStudents,
+        },
+      });
+
+      await tx.schoolModuleEntitlement.createMany({
+        data: ['admissions', 'attendance', 'fees', 'communication', 'reports', 'certificates'].map((moduleKey) => ({
+          schoolId: createdSchool.id,
+          moduleKey,
+          isEnabled: true,
+        })),
+      });
+
+      const createdStaff = await tx.staff.create({
+        data: {
+          groupId: group.id,
+          firstName: dto.adminFirstName,
+          lastName: dto.adminLastName,
+          email: normalizedAdminEmail,
+          mobilePrimary: dto.adminMobile,
+          passwordHash,
+          mustChangePassword: true,
+          status: 'active',
+        },
+      });
+
+      await tx.staffSchoolRole.create({
+        data: {
+          staffId: createdStaff.id,
+          schoolId: createdSchool.id,
+          role: 'school_admin',
+          effectiveFrom: new Date(),
+        },
+      });
+
+      return { school: createdSchool, staff: createdStaff };
     });
 
-    // Link Admin to School
-    await prisma.staffSchoolRole.create({
-      data: {
-        staffId: staff.id,
-        schoolId: school.id,
-        role: 'school_admin',
-        effectiveFrom: new Date(),
-      },
-    });
-
-    console.log(`[PLATFORM] Registered new school: ${school.name}. Admin temporary password: ${tempPassword}`);
+    console.log(`[PLATFORM] Registered new school: ${school.name}.`);
 
     return res.json({
       school: {
@@ -283,7 +323,12 @@ app.post('/v1/platform/schools', requireAuth, async (req, res) => {
       },
       tempPassword,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return res.status(400).json({
+        error: 'A staff member with this admin email or mobile number already exists.',
+      });
+    }
     console.error('Error registering school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -313,7 +358,7 @@ app.patch('/v1/platform/schools/:id/student-cap', requireAuth, async (req, res) 
       schoolId: school.id,
       maxStudents: school.maxStudents,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error updating student cap:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -335,7 +380,7 @@ app.get('/v1/platform/support-access/active', requireAuth, async (req, res) => {
     });
 
     return res.json(grants);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching active support grants:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -379,7 +424,7 @@ app.post('/v1/platform/support-access/grant', requireAuth, async (req: Authentic
     console.log(`[SUPPORT] Platform owner (${platformOwnerId}) granted access to school: ${school.name}`);
 
     return res.json(grant);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error creating support grant:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -411,7 +456,7 @@ app.post('/v1/platform/support-access/revoke/:id', requireAuth, async (req: Auth
     console.log(`[SUPPORT] Support grant revoked: ${id}`);
 
     return res.json(updatedGrant);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error revoking support grant:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -465,95 +510,147 @@ async function getSchoolResponse(schoolId: string) {
 async function runBackgroundPurge(schoolId: string) {
   console.log(`[PURGE] Starting async database purge for school: ${schoolId}`);
   try {
-    // 1. Anonymise all student PII
-    const students = await prisma.student.findMany({ where: { schoolId } });
-    for (const s of students) {
-      await prisma.student.update({
-        where: { id: s.id },
-        data: {
-          firstName: 'Student',
-          lastName: s.id.substring(0, 8),
-          dateOfBirth: new Date('1970-01-01'),
-          aadhaarNumber: null,
-          photoBlobPath: null,
-        },
-      });
-    }
-    console.log(`[PURGE] Anonymised PII for ${students.length} students.`);
+    await prisma.$transaction(
+      async (tx) => {
+        // Identify staff members who belong exclusively to this school
+        const schoolRoles = await tx.staffSchoolRole.findMany({
+          where: { schoolId },
+          select: { staffId: true },
+        });
+        const schoolStaffIds = Array.from(new Set(schoolRoles.map((r) => r.staffId)));
+        let exclusiveStaffIds: string[] = [];
+        if (schoolStaffIds.length > 0) {
+          const otherSchoolRoles = await tx.staffSchoolRole.findMany({
+            where: {
+              staffId: { in: schoolStaffIds },
+              schoolId: { not: schoolId },
+            },
+            select: { staffId: true },
+          });
+          const sharedStaffIds = new Set(otherSchoolRoles.map((r) => r.staffId));
+          exclusiveStaffIds = schoolStaffIds.filter((id) => !sharedStaffIds.has(id));
+        }
 
-    // 2. Delete all staff records
-    const school = await prisma.school.findUnique({ where: { id: schoolId } });
-    if (school) {
-      // Set classTeacherStaffId = null in sections to prevent constraint violations
-      await prisma.section.updateMany({
-        where: { schoolId },
-        data: { classTeacherStaffId: null },
-      });
+        // 1. Anonymise all student PII while preserving anonymized relational anchors
+        const anonymisedStudents = await tx.student.updateMany({
+          where: { schoolId },
+          data: {
+            firstName: 'Purged',
+            middleName: null,
+            lastName: 'Student',
+            dateOfBirth: new Date('1970-01-01'),
+            aadhaarNumber: null,
+            udiseStudentId: null,
+            apaarId: null,
+            penNumber: null,
+            photoBlobPath: null,
+            bloodGroup: null,
+            religion: null,
+            caste: null,
+            category: null,
+            motherTongue: null,
+            dateOfBirthInWords: null,
+            birthCity: null,
+            birthTehsil: null,
+            birthDistrict: null,
+            birthState: null,
+            addressLine: null,
+            city: null,
+            state: null,
+            pincode: null,
+          },
+        });
+        console.log(`[PURGE] Anonymised PII for ${anonymisedStudents.count} students.`);
 
-      // Delete auth sessions for these staff members
-      await prisma.$executeRawUnsafe(
-        'DELETE FROM auth_sessions WHERE staff_id IN (SELECT id FROM staff WHERE group_id = $1::uuid)',
-        school.groupId
-      );
+        // 2. Delete operational, financial, and PII records in FK-safe order
+        await tx.chatMessage.deleteMany({ where: { thread: { schoolId } } });
+        const threads = await tx.chatThread.findMany({
+          where: { schoolId },
+          select: { id: true },
+        });
+        const threadIds = threads.map((t) => t.id);
+        if (threadIds.length > 0) {
+          await tx.chatAdminAccessLog.deleteMany({
+            where: { threadId: { in: threadIds } },
+          });
+        }
+        await tx.chatThread.deleteMany({ where: { schoolId } });
 
-      // Delete broadcast recipients for these staff members
-      await prisma.$executeRawUnsafe(
-        'DELETE FROM broadcast_recipients WHERE staff_id IN (SELECT id FROM staff WHERE group_id = $1::uuid)',
-        school.groupId
-      );
+        await tx.broadcastRecipient.deleteMany({ where: { broadcast: { schoolId } } });
+        await tx.broadcast.deleteMany({ where: { schoolId } });
+        await tx.notificationLog.deleteMany({ where: { schoolId } });
+        await tx.notificationRule.deleteMany({ where: { schoolId } });
 
-      // Delete staff subject assignments
-      await prisma.$executeRawUnsafe(
-        'DELETE FROM staff_subject_assignments WHERE staff_id IN (SELECT id FROM staff WHERE group_id = $1::uuid)',
-        school.groupId
-      );
+        await tx.schoolEventTarget.deleteMany({ where: { event: { schoolId } } });
+        await tx.schoolEvent.deleteMany({ where: { schoolId } });
 
-      // Delete staff attendance records
-      await prisma.staffAttendanceRecord.deleteMany({ where: { schoolId } });
+        await tx.studentAttendanceRecord.deleteMany({ where: { session: { schoolId } } });
+        await tx.attendanceCorrectionRequest.deleteMany({ where: { schoolId } });
+        await tx.attendanceSession.deleteMany({ where: { schoolId } });
+        await tx.schoolHoliday.deleteMany({ where: { schoolId } });
 
-      // Delete staff roles for this school
-      await prisma.staffSchoolRole.deleteMany({ where: { schoolId } });
-      
-      // Delete staff records belonging to this school's group
-      const staffDeleted = await prisma.staff.deleteMany({ where: { groupId: school.groupId } });
-      console.log(`[PURGE] Deleted ${staffDeleted.count} staff records.`);
-    }
+        await tx.admissionDocument.deleteMany({ where: { admission: { schoolId } } });
+        await tx.admissionStatusHistory.deleteMany({ where: { admission: { schoolId } } });
+        await tx.admission.deleteMany({ where: { schoolId } });
+        await tx.certificate.deleteMany({ where: { schoolId } });
 
-    // 3. Delete all operational data
-    // Attendance
-    await prisma.studentAttendanceRecord.deleteMany({ where: { session: { schoolId } } });
-    await prisma.attendanceCorrectionRequest.deleteMany({ where: { schoolId } });
-    await prisma.attendanceSession.deleteMany({ where: { schoolId } });
-    
-    // Notices / Broadcasts
-    await prisma.broadcastRecipient.deleteMany({ where: { broadcast: { schoolId } } });
-    await prisma.broadcast.deleteMany({ where: { schoolId } });
-    
-    // Chats
-    await prisma.chatMessage.deleteMany({ where: { thread: { schoolId } } });
-    
-    const threads = await prisma.chatThread.findMany({
-      where: { schoolId },
-      select: { id: true }
-    });
-    const threadIds = threads.map(t => t.id);
-    await prisma.chatAdminAccessLog.deleteMany({
-      where: { threadId: { in: threadIds } }
-    });
-    
-    await prisma.chatThread.deleteMany({ where: { schoolId } });
+        await tx.feePaymentAllocation.deleteMany({ where: { payment: { schoolId } } });
+        await tx.feePayment.deleteMany({ where: { schoolId } });
+        await tx.feeReceipt.deleteMany({ where: { schoolId } });
+        await tx.studentLateFee.deleteMany({ where: { account: { schoolId } } });
+        await tx.studentFeeConcession.deleteMany({ where: { account: { schoolId } } });
+        await tx.studentFeeInstallment.deleteMany({ where: { account: { schoolId } } });
+        await tx.studentFeeAccount.deleteMany({ where: { schoolId } });
 
-    // Holidays & Promotions & Notifications
-    await prisma.schoolHoliday.deleteMany({ where: { schoolId } });
-    await prisma.promotionRun.deleteMany({ where: { schoolId } });
-    await prisma.notificationLog.deleteMany({ where: { schoolId } });
-    await prisma.notificationRule.deleteMany({ where: { schoolId } });
+        await tx.studentMedicalInfo.deleteMany({ where: { student: { schoolId } } });
+        await tx.studentParentContact.deleteMany({ where: { student: { schoolId } } });
+        await tx.clickwrapConsentLog.deleteMany({ where: { schoolId } });
+        await tx.deviceToken.deleteMany({ where: { schoolId } });
+        await tx.authSession.deleteMany({ where: { parentContact: { schoolId } } });
+        await tx.parentContact.deleteMany({ where: { schoolId } });
+        await tx.familyGroup.deleteMany({ where: { schoolId } });
 
-    // Mark purge as COMPLETED
-    await prisma.school.update({
-      where: { id: schoolId },
-      data: { purgeStatus: 'COMPLETED' },
-    });
+        await tx.promotionRun.deleteMany({ where: { schoolId } });
+        await tx.appFeedback.deleteMany({ where: { schoolId } });
+        await tx.platformNotificationTarget.deleteMany({ where: { schoolId } });
+
+        // 3. Detach and delete school-scoped staff records
+        await tx.section.updateMany({
+          where: { schoolId },
+          data: { classTeacherStaffId: null },
+        });
+        await tx.staffAttendanceRecord.deleteMany({ where: { schoolId } });
+        await tx.staffSchoolRole.deleteMany({ where: { schoolId } });
+
+        if (exclusiveStaffIds.length > 0) {
+          await tx.authSession.deleteMany({
+            where: { staffId: { in: exclusiveStaffIds } },
+          });
+          await tx.broadcastRecipient.deleteMany({
+            where: { staffId: { in: exclusiveStaffIds } },
+          });
+          await tx.staffSubjectAssignment.deleteMany({
+            where: { staffId: { in: exclusiveStaffIds } },
+          });
+          await tx.deviceToken.deleteMany({
+            where: { staffId: { in: exclusiveStaffIds } },
+          });
+          await tx.platformNotificationRead.deleteMany({
+            where: { staffId: { in: exclusiveStaffIds } },
+          });
+          const staffDeleted = await tx.staff.deleteMany({
+            where: { id: { in: exclusiveStaffIds } },
+          });
+          console.log(`[PURGE] Deleted ${staffDeleted.count} exclusive staff records.`);
+        }
+
+        await tx.school.update({
+          where: { id: schoolId },
+          data: { purgeStatus: 'COMPLETED' },
+        });
+      },
+      { maxWait: 15000, timeout: 120000 },
+    );
 
     console.log(`[PURGE] Purge completed successfully for school ID: ${schoolId}`);
   } catch (err) {
@@ -611,7 +708,7 @@ app.post('/v1/platform/schools/:id/pause', requireAuth, async (req: Authenticate
 
     const updated = await getSchoolResponse(id);
     return res.json(updated);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error pausing school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -659,7 +756,7 @@ app.post('/v1/platform/schools/:id/unpause', requireAuth, async (req: Authentica
 
     const updated = await getSchoolResponse(id);
     return res.json(updated);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error reactivating school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -685,7 +782,7 @@ app.post('/v1/platform/schools/:id/archive', requireAuth, async (req: Authentica
       return res.status(400).json({ error: 'Only ACTIVE or PAUSED schools can be archived' });
     }
 
-    const originalStatus = school.status as any;
+    const originalStatus = school.status;
 
     await prisma.$transaction([
       prisma.school.update({
@@ -709,7 +806,7 @@ app.post('/v1/platform/schools/:id/archive', requireAuth, async (req: Authentica
 
     const updated = await getSchoolResponse(id);
     return res.json(updated);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error archiving school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -757,7 +854,7 @@ app.post('/v1/platform/schools/:id/unarchive', requireAuth, async (req: Authenti
 
     const updated = await getSchoolResponse(id);
     return res.json(updated);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error unarchiving school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -783,7 +880,7 @@ app.post('/v1/platform/schools/:id/delete', requireAuth, async (req: Authenticat
       return res.status(400).json({ error: 'School is already deleted or purged' });
     }
 
-    const originalStatus = school.status as any;
+    const originalStatus = school.status;
     const restoreDeadline = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
     await prisma.$transaction([
@@ -810,7 +907,7 @@ app.post('/v1/platform/schools/:id/delete', requireAuth, async (req: Authenticat
 
     const updated = await getSchoolResponse(id);
     return res.json(updated);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error deleting school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -864,7 +961,7 @@ app.post('/v1/platform/schools/:id/restore', requireAuth, async (req: Authentica
 
     const updated = await getSchoolResponse(id);
     return res.json(updated);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error restoring school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -920,7 +1017,7 @@ app.post('/v1/platform/schools/:id/purge', requireAuth, async (req: Authenticate
     runBackgroundPurge(id);
 
     return res.json({ status: 'purge_initiated', estimatedCompletionMinutes: 5 });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error purging school:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -957,7 +1054,7 @@ app.post('/v1/platform/schools/:id/retry-purge', requireAuth, async (req: Authen
     runBackgroundPurge(id);
 
     return res.json({ status: 'purge_initiated', estimatedCompletionMinutes: 5 });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error retrying purge:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -1011,7 +1108,7 @@ app.post('/v1/platform/schools/:id/reset-admin-password', requireAuth, async (re
     console.log(`[PLATFORM] Reset password for staff ${staffId} (school admin of school ${id})`);
 
     return res.json({ temporaryPassword });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error resetting admin password:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -1049,7 +1146,7 @@ app.get('/v1/platform/schools/:id/history', requireAuth, async (req: Authenticat
     }));
 
     return res.json(result);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching status history:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -1096,7 +1193,7 @@ app.get('/v1/platform/schools/:id/modules', requireAuth, async (req: Authenticat
     }));
 
     return res.json([...controllableModules, ...coreModules]);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error fetching modules:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -1192,7 +1289,7 @@ app.patch('/v1/platform/schools/:id/modules/:moduleKey', requireAuth, async (req
     }));
 
     return res.json([...controllableModules, ...coreModules]);
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error updating module:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }

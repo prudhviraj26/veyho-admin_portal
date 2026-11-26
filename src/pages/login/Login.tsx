@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { apiClient } from '../../lib/axios';
+import { getApiErrorMessage } from '../../lib/errors';
 import { Shield, Mail, Lock, Eye, EyeOff, Loader2, ArrowRight } from 'lucide-react';
 
 export const Login: React.FC = () => {
@@ -43,9 +44,8 @@ export const Login: React.FC = () => {
       } else {
         setError('Unauthorized. Only Veyho Platform Owners can access this portal.');
       }
-    } catch (err: any) {
-      const msg = err.response?.data?.message || 'Invalid email or password';
-      setError(msg);
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, 'Invalid email or password'));
     } finally {
       setLoading(false);
     }

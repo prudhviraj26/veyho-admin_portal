@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import fs from 'fs';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -7,6 +8,32 @@ export interface AuthenticatedRequest extends Request {
     email: string;
     isPlatformOwner: boolean;
   };
+}
+
+function loadPemKey(rawValue?: string, pathValue?: string): string {
+  if (rawValue && rawValue.trim()) {
+    return rawValue.trim().replace(/\\n/g, '\n');
+  }
+  if (pathValue && pathValue.trim() && fs.existsSync(pathValue.trim())) {
+    return fs.readFileSync(pathValue.trim(), 'utf8');
+  }
+  return '';
+}
+
+/**
+ * Returns the RS256 keypair from environment variables or fails fast if missing.
+ */
+export function getJwtKeys(): { privateKey: string; publicKey: string } {
+  const privateKey = loadPemKey(process.env.JWT_PRIVATE_KEY, process.env.JWT_PRIVATE_KEY_PATH);
+  const publicKey = loadPemKey(process.env.JWT_PUBLIC_KEY, process.env.JWT_PUBLIC_KEY_PATH);
+
+  if (!privateKey || !publicKey) {
+    throw new Error(
+      'FATAL: JWT_PRIVATE_KEY and JWT_PUBLIC_KEY (or *_PATH) must be configured for veyho-admin-backend.',
+    );
+  }
+
+  return { privateKey, publicKey };
 }
 
 export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -17,17 +44,26 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
 
   const token = authHeader.split(' ')[1];
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'veyho_admin_portal_local_secret_key_1293847') as any;
-    if (!decoded.isPlatformOwner) {
+    const { publicKey } = getJwtKeys();
+    const decoded = jwt.verify(token, publicKey, { algorithms: ['RS256'] }) as jwt.JwtPayload & {
+      id?: string;
+      email?: string;
+      isPlatformOwner?: boolean;
+      roles?: string[];
+    };
+    const isOwner = Boolean(decoded.isPlatformOwner) || (Array.isArray(decoded.roles) && decoded.roles.includes('platform_owner'));
+    const userId = decoded.id || decoded.sub;
+    const userEmail = decoded.email;
+    if (!isOwner || !userId || !userEmail) {
       return res.status(403).json({ error: 'Forbidden: Access denied' });
     }
     req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      isPlatformOwner: decoded.isPlatformOwner,
+      id: userId,
+      email: userEmail,
+      isPlatformOwner: true,
     };
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: 'Unauthorized: Invalid token' });
   }
 }

@@ -6,6 +6,8 @@ import {
   Calendar, User, FileText, Lock, LayoutDashboard, Users, GraduationCap, Settings, ClipboardList, Clock, CreditCard, MessageSquare, BarChart3, Bell
 } from 'lucide-react';
 import { apiClient } from '../../lib/axios';
+import { getApiErrorMessage } from '../../lib/errors';
+import { enterSupportMode } from '../../lib/support';
 
 const getModuleIcon = (key: string) => {
   switch (key) {
@@ -154,25 +156,32 @@ export const SchoolRegistry: React.FC = () => {
   const [submittingDisable, setSubmittingDisable] = useState(false);
   const [disableError, setDisableError] = useState<string | null>(null);
 
-  const fetchModules = async (schoolId: string) => {
-    setLoadingModules(true);
-    setModulesError(null);
-    try {
-      const res = await apiClient.get(`/platform/schools/${schoolId}/modules`);
-      setModulesList(res.data);
-    } catch (err: any) {
-      console.error('Failed to fetch modules', err);
-      setModulesError(err.response?.data?.error || 'Failed to retrieve modules. Please try again.');
-    } finally {
-      setLoadingModules(false);
-    }
-  };
-
   useEffect(() => {
-    if (activeSchool) {
-      fetchModules(activeSchool.id);
-      setDrawerTab('modules');
-    }
+    if (!activeSchool) return;
+    let cancelled = false;
+    const loadModules = async () => {
+      setLoadingModules(true);
+      setModulesError(null);
+      try {
+        const res = await apiClient.get(`/platform/schools/${activeSchool.id}/modules`);
+        if (!cancelled) {
+          setModulesList(res.data);
+        }
+      } catch (err: unknown) {
+        console.error('Failed to fetch modules', err);
+        if (!cancelled) {
+          setModulesError(getApiErrorMessage(err, 'Failed to retrieve modules. Please try again.'));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingModules(false);
+        }
+      }
+    };
+    void loadModules();
+    return () => {
+      cancelled = true;
+    };
   }, [activeSchool]);
 
   const handleToggleModule = async (module: ModuleItem) => {
@@ -189,9 +198,9 @@ export const SchoolRegistry: React.FC = () => {
           { isEnabled: true }
         );
         setModulesList(res.data);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Failed to enable module', err);
-        alert(err.response?.data?.error || 'Failed to enable module.');
+        alert(getApiErrorMessage(err, 'Failed to enable module.'));
       }
     }
   };
@@ -217,9 +226,9 @@ export const SchoolRegistry: React.FC = () => {
       );
       setModulesList(res.data);
       setDisablingModule(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to disable module', err);
-      setDisableError(err.response?.data?.error || 'Failed to disable module.');
+      setDisableError(getApiErrorMessage(err, 'Failed to disable module.'));
     } finally {
       setSubmittingDisable(false);
     }
@@ -231,7 +240,7 @@ export const SchoolRegistry: React.FC = () => {
       const res = await apiClient.get('/platform/schools');
       setSchools(res.data);
       setError(null);
-    } catch (e: any) {
+    } catch {
       setError('Failed to retrieve school registry.');
     } finally {
       setLoading(false);
@@ -239,7 +248,28 @@ export const SchoolRegistry: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchSchools();
+    let cancelled = false;
+    const loadSchools = async () => {
+      try {
+        const res = await apiClient.get('/platform/schools');
+        if (!cancelled) {
+          setSchools(res.data);
+          setError(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setError('Failed to retrieve school registry.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadSchools();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Close dropdown when clicking outside
@@ -268,9 +298,8 @@ export const SchoolRegistry: React.FC = () => {
         adminEmail: '',
         adminMobile: '',
       });
-    } catch (err: any) {
-      const msg = err.response?.data?.message || 'Failed to register school.';
-      setFormError(Array.isArray(msg) ? msg.join(', ') : msg);
+    } catch (err: unknown) {
+      setFormError(getApiErrorMessage(err, 'Failed to register school.'));
     } finally {
       setRegistering(false);
     }
@@ -289,8 +318,8 @@ export const SchoolRegistry: React.FC = () => {
       setCapModalOpen(false);
       setCapSchool(null);
       fetchSchools();
-    } catch (err: any) {
-      setCapError(err.response?.data?.error || 'Failed to update student cap.');
+    } catch (err: unknown) {
+      setCapError(getApiErrorMessage(err, 'Failed to update student cap.'));
     } finally {
       setUpdatingCap(false);
     }
@@ -342,8 +371,8 @@ Link: https://schools.veyho.com/login (or local portal)`;
         schoolName: resetSchool.name,
       });
       setResetConfirmOpen(false);
-    } catch (err: any) {
-      setResetError(err.response?.data?.error || 'Failed to reset admin password.');
+    } catch (err: unknown) {
+      setResetError(getApiErrorMessage(err, 'Failed to reset admin password.'));
     } finally {
       setResettingPassword(false);
     }
@@ -387,8 +416,8 @@ Link: https://schools.veyho.com/login (or local portal)`;
       setActionReason('');
       setConfirmationInput('');
       fetchSchools();
-    } catch (err: any) {
-      setActionError(err.response?.data?.error || `Failed to perform ${actionType} action.`);
+    } catch (err: unknown) {
+      setActionError(getApiErrorMessage(err, `Failed to perform ${actionType} action.`));
     } finally {
       setSubmittingAction(false);
     }
@@ -533,7 +562,10 @@ Link: https://schools.veyho.com/login (or local portal)`;
                   return (
                     <tr 
                       key={s.id} 
-                      onClick={() => setActiveSchool(s)}
+                      onClick={() => {
+                        setDrawerTab('modules');
+                        setActiveSchool(s);
+                      }}
                       className="hover:bg-zinc-900/30 transition-colors cursor-pointer"
                     >
                       <td className="p-4">
@@ -553,7 +585,8 @@ Link: https://schools.veyho.com/login (or local portal)`;
                             {getStatusBadge(s)}
                             {s.status === 'PURGED' && s.purgeStatus === 'FAILED' && (
                               <button
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setSelectedSchool(s);
                                   setActionType('retry-purge');
                                 }}
@@ -639,15 +672,29 @@ Link: https://schools.veyho.com/login (or local portal)`;
                       </td>
                       <td className="p-4 text-right">
                         <div className="relative inline-flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => {
-                              localStorage.setItem('shq_support_school_id', s.id);
-                              window.location.reload();
-                            }}
-                            className="text-[10px] bg-sky-950/40 hover:bg-sky-900/60 text-sky-400 font-semibold px-2.5 py-1.5 rounded border border-sky-900/40 transition-colors"
-                          >
-                            Support Mode
-                          </button>
+                          {(s.status === 'ACTIVE' || s.status === 'PAUSED') && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const res = await apiClient.get('/platform/support-access/active');
+                                  const activeGrants = Array.isArray(res.data) ? res.data : [];
+                                  const hasGrant = activeGrants.some(
+                                    (g: { schoolId: string }) => g.schoolId === s.id,
+                                  );
+                                  if (hasGrant) {
+                                    enterSupportMode(s.id);
+                                    return;
+                                  }
+                                } catch {
+                                  // Fall back to requesting an audited grant
+                                }
+                                navigate(`/support?schoolId=${encodeURIComponent(s.id)}`);
+                              }}
+                              className="text-[10px] bg-sky-950/40 hover:bg-sky-900/60 text-sky-400 font-semibold px-2.5 py-1.5 rounded border border-sky-900/40 transition-colors"
+                            >
+                              Support Mode
+                            </button>
+                          )}
 
                           <button
                             onClick={() => fetchHistory(s)}
@@ -704,13 +751,13 @@ Link: https://schools.veyho.com/login (or local portal)`;
                                   {s.status === 'ACTIVE' && (
                                     <>
                                       <button
-                                        onClick={() => { setSelectedSchool(s); setActionType('pause'); }}
+                                        onClick={() => { setSelectedSchool(s); setActionType('pause'); setActiveDropdown(null); }}
                                         className="w-full text-left px-3 py-2 text-xs text-amber-400 hover:bg-amber-950/20 hover:text-amber-300 flex items-center gap-2"
                                       >
                                         <Pause className="w-3.5 h-3.5" /> Pause School
                                       </button>
                                       <button
-                                        onClick={() => { setSelectedSchool(s); setActionType('archive'); }}
+                                        onClick={() => { setSelectedSchool(s); setActionType('archive'); setActiveDropdown(null); }}
                                         className="w-full text-left px-3 py-2 text-xs text-blue-400 hover:bg-blue-950/20 hover:text-blue-300 flex items-center gap-2"
                                       >
                                         <Archive className="w-3.5 h-3.5" /> Archive Database
@@ -721,13 +768,13 @@ Link: https://schools.veyho.com/login (or local portal)`;
                                   {s.status === 'PAUSED' && (
                                     <>
                                       <button
-                                        onClick={() => { setSelectedSchool(s); setActionType('unpause'); }}
+                                        onClick={() => { setSelectedSchool(s); setActionType('unpause'); setActiveDropdown(null); }}
                                         className="w-full text-left px-3 py-2 text-xs text-emerald-400 hover:bg-emerald-950/20 hover:text-emerald-300 flex items-center gap-2"
                                       >
                                         <Play className="w-3.5 h-3.5" /> Reactivate School
                                       </button>
                                       <button
-                                        onClick={() => { setSelectedSchool(s); setActionType('archive'); }}
+                                        onClick={() => { setSelectedSchool(s); setActionType('archive'); setActiveDropdown(null); }}
                                         className="w-full text-left px-3 py-2 text-xs text-blue-400 hover:bg-blue-950/20 hover:text-blue-300 flex items-center gap-2"
                                       >
                                         <Archive className="w-3.5 h-3.5" /> Archive Database
@@ -737,7 +784,7 @@ Link: https://schools.veyho.com/login (or local portal)`;
 
                                   {s.status === 'ARCHIVED' && (
                                     <button
-                                      onClick={() => { setSelectedSchool(s); setActionType('unarchive'); }}
+                                      onClick={() => { setSelectedSchool(s); setActionType('unarchive'); setActiveDropdown(null); }}
                                       className="w-full text-left px-3 py-2 text-xs text-emerald-400 hover:bg-emerald-950/20 hover:text-emerald-300 flex items-center gap-2"
                                     >
                                       <RefreshCw className="w-3.5 h-3.5" /> Restore Database
@@ -746,7 +793,7 @@ Link: https://schools.veyho.com/login (or local portal)`;
 
                                   {s.status !== 'DELETED' && (
                                     <button
-                                      onClick={() => { setSelectedSchool(s); setActionType('delete'); }}
+                                      onClick={() => { setSelectedSchool(s); setActionType('delete'); setActiveDropdown(null); }}
                                       className="w-full text-left px-3 py-2 text-xs text-red-500 hover:bg-red-950/20 hover:text-red-400 border-t border-zinc-900 flex items-center gap-2"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" /> Delete School
@@ -757,14 +804,14 @@ Link: https://schools.veyho.com/login (or local portal)`;
                                     <>
                                       {!isDeletedExpired && (
                                         <button
-                                          onClick={() => { setSelectedSchool(s); setActionType('restore'); }}
+                                          onClick={() => { setSelectedSchool(s); setActionType('restore'); setActiveDropdown(null); }}
                                           className="w-full text-left px-3 py-2 text-xs text-emerald-400 hover:bg-emerald-950/20 hover:text-emerald-300 flex items-center gap-2"
                                         >
                                           <RefreshCw className="w-3.5 h-3.5" /> Restore School
                                         </button>
                                       )}
                                       <button
-                                        onClick={() => { setSelectedSchool(s); setActionType('purge'); }}
+                                        onClick={() => { setSelectedSchool(s); setActionType('purge'); setActiveDropdown(null); }}
                                         className="w-full text-left px-3 py-2 text-xs text-red-500 hover:bg-red-950/30 hover:text-red-400 flex items-center gap-2"
                                       >
                                         <AlertTriangle className="w-3.5 h-3.5 text-red-500" /> Permanently Purge

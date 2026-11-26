@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Key, Plus, Trash2, ShieldAlert, Loader2, Clock, X, Shield } from 'lucide-react';
 import { apiClient } from '../../lib/axios';
+import { getApiErrorMessage } from '../../lib/errors';
+import { enterSupportMode } from '../../lib/support';
 
 interface SchoolOption {
   id: string;
@@ -17,28 +20,38 @@ interface SupportGrant {
   school: {
     name: string;
   };
-  staff: {
+  platformOwner?: {
+    id: string;
     firstName: string;
     lastName: string;
     email: string;
-  };
+  } | null;
 }
 
 export const SupportGrants: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialSchoolId = searchParams.get('schoolId') ?? '';
   const [grants, setGrants] = useState<SupportGrant[]>([]);
   const [schools, setSchools] = useState<SchoolOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   // Form state
-  const [modalOpen, setModalOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(() => Boolean(initialSchoolId));
   const [requesting, setRequesting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
-    schoolId: '',
+    schoolId: initialSchoolId,
     reason: '',
     duration: 4, // Default to 4 hours
   });
+
+  useEffect(() => {
+    if (searchParams.has('schoolId')) {
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -49,8 +62,9 @@ export const SupportGrants: React.FC = () => {
       ]);
       setGrants(grantsRes.data);
       setSchools(schoolsRes.data);
+      setNowMs(Date.now());
       setError(null);
-    } catch (e) {
+    } catch {
       setError('Failed to load support registry.');
     } finally {
       setLoading(false);
@@ -58,7 +72,33 @@ export const SupportGrants: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchData();
+    let cancelled = false;
+    const loadInitial = async () => {
+      try {
+        const [grantsRes, schoolsRes] = await Promise.all([
+          apiClient.get('/platform/support-access/active'),
+          apiClient.get('/platform/schools'),
+        ]);
+        if (!cancelled) {
+          setGrants(grantsRes.data);
+          setSchools(schoolsRes.data);
+          setNowMs(Date.now());
+          setError(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setError('Failed to load support registry.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadInitial();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleCreateGrant = async (e: React.FormEvent) => {
@@ -80,9 +120,8 @@ export const SupportGrants: React.FC = () => {
       setModalOpen(false);
       setFormData({ schoolId: '', reason: '', duration: 4 });
       fetchData();
-    } catch (err: any) {
-      const msg = err.response?.data?.message || 'Failed to request support access grant.';
-      setFormError(Array.isArray(msg) ? msg.join(', ') : msg);
+    } catch (err: unknown) {
+      setFormError(getApiErrorMessage(err, 'Failed to request support access grant.'));
     } finally {
       setRequesting(false);
     }
@@ -96,7 +135,7 @@ export const SupportGrants: React.FC = () => {
     try {
       await apiClient.post(`/platform/support-access/revoke/${id}`);
       fetchData();
-    } catch (e) {
+    } catch {
       alert('Failed to revoke access grant.');
     }
   };
@@ -161,7 +200,7 @@ export const SupportGrants: React.FC = () => {
               <tbody className="divide-y divide-zinc-850">
                 {grants.map((g) => {
                   const expiryDate = new Date(g.expiresAt);
-                  const timeLeftMs = expiryDate.getTime() - Date.now();
+                  const timeLeftMs = expiryDate.getTime() - nowMs;
                   const hoursLeft = Math.max(0, Math.ceil(timeLeftMs / (1000 * 60 * 60)));
 
                   return (
@@ -171,8 +210,12 @@ export const SupportGrants: React.FC = () => {
                         <div className="text-[10px] text-zinc-500 font-mono mt-0.5">{g.schoolId}</div>
                       </td>
                       <td className="p-4">
-                        <div className="text-zinc-200 font-semibold">{g.staff.firstName} {g.staff.lastName}</div>
-                        <div className="text-[10px] text-zinc-500 font-mono">{g.staff.email}</div>
+                        <div className="text-zinc-200 font-semibold">
+                          {g.platformOwner ? `${g.platformOwner.firstName} ${g.platformOwner.lastName}` : 'Platform Operator'}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 font-mono">
+                          {g.platformOwner?.email || '—'}
+                        </div>
                       </td>
                       <td className="p-4 max-w-xs truncate text-zinc-300" title={g.reason}>
                         {g.reason}
@@ -188,10 +231,7 @@ export const SupportGrants: React.FC = () => {
                       </td>
                       <td className="p-4 text-right space-x-2">
                         <button
-                          onClick={() => {
-                            localStorage.setItem('shq_support_school_id', g.schoolId);
-                            window.location.reload();
-                          }}
+                          onClick={() => enterSupportMode(g.schoolId)}
                           className="text-[10px] bg-amber-950/40 hover:bg-amber-900/60 text-amber-400 font-semibold px-2.5 py-1.5 rounded border border-amber-900/40 transition-colors"
                         >
                           Enter Support

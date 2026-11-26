@@ -23,7 +23,7 @@ export const Overview: React.FC = () => {
           activeGrantsCount: Array.isArray(activeGrantsRes.data) ? activeGrantsRes.data.length : 0,
           securityAuditsPassed: true,
         });
-      } catch (e) {
+      } catch {
         setStats({
           schoolsCount: 0,
           activeGrantsCount: 0,

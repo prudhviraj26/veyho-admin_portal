@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Shield, School, Key, LogOut, Menu, X, Terminal, User as UserIcon, Bell } from 'lucide-react';
@@ -6,7 +6,7 @@ import { Shield, School, Key, LogOut, Menu, X, Terminal, User as UserIcon, Bell 
 interface SidebarItem {
   name: string;
   path: string;
-  icon: React.ComponentType<any>;
+  icon: React.ComponentType<{ className?: string }>;
 }
 
 export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -14,14 +14,8 @@ export const DashboardLayout: React.FC<{ children: React.ReactNode }> = ({ child
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [supportActive, setSupportActive] = useState(false);
-  const [_supportSchoolId, setSupportSchoolId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const activeId = localStorage.getItem('shq_support_school_id');
-    setSupportActive(!!activeId);
-    setSupportSchoolId(activeId);
-  }, [location]);
+  // Subscribe to route transitions via `location.pathname` and read current session flag
+  const supportActive = Boolean(location.pathname && localStorage.getItem('shq_support_school_id'));
 
   const menuItems: SidebarItem[] = [
     { name: 'Terminal Dashboard', path: '/', icon: Terminal },

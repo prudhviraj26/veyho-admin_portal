@@ -16,6 +16,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { apiClient } from '../../lib/axios';
+import { getApiErrorMessage } from '../../lib/errors';
 
 type Priority = 'INFO' | 'WARNING' | 'CRITICAL';
 
@@ -113,14 +114,35 @@ export const PlatformNotifications: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchData();
+    let cancelled = false;
+    const loadInitial = async () => {
+      try {
+        const [schoolsRes, notifRes] = await Promise.all([
+          apiClient.get('/platform/schools'),
+          apiClient.get('/platform/notifications'),
+        ]);
+        if (cancelled) return;
+        setSchools(
+          Array.isArray(schoolsRes.data)
+            ? schoolsRes.data.filter((s: SchoolOption) => s.status !== 'PURGED')
+            : [],
+        );
+        setNotifications(Array.isArray(notifRes.data) ? notifRes.data : []);
+      } catch {
+        if (!cancelled) {
+          setError('Failed to load schools or notification history.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadInitial();
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  useEffect(() => {
-    if (initialSchoolId) {
-      setSelectedSchoolIds((prev) => (prev.includes(initialSchoolId) ? prev : [...prev, initialSchoolId]));
-    }
-  }, [initialSchoolId]);
 
   const filteredSchools = useMemo(() => {
     const q = schoolSearch.trim().toLowerCase();
@@ -185,8 +207,8 @@ export const PlatformNotifications: React.FC = () => {
       setActionUrl('');
       setExpiresAt('');
       await fetchData();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to send notification.');
+    } catch (err: unknown) {
+      setError(getApiErrorMessage(err, 'Failed to send notification.'));
     } finally {
       setSubmitting(false);
     }
